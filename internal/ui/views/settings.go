@@ -4,54 +4,70 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mceck/clickup-tui/internal/clients"
 	ui "github.com/mceck/clickup-tui/internal/ui/styles"
 )
 
-// SettingsModel è il modello per la vista impostazioni
 type SettingsModel struct {
-	username   textinput.Model
-	theme      textinput.Model
+	token      textinput.Model
+	teamId     textinput.Model
+	userId     textinput.Model
+	viewId     textinput.Model
 	focusIndex int
 	inputs     []textinput.Model
 	width      int
 	height     int
 }
 
-// NewSettingsModel crea una nuova istanza del modello impostazioni
 func NewSettingsModel() SettingsModel {
-	// Creazione del campo username
-	username := textinput.New()
-	username.Placeholder = "Inserisci il tuo nome utente"
-	username.Focus()
-	username.CharLimit = 32
-	username.Width = 30
+	config := clients.GetConfig()
+	token := textinput.New()
+	token.Placeholder = "Inserisci il tuo token ClickUp"
+	token.CharLimit = 150
+	token.Width = 60
+	token.SetValue(config.ClickupToken)
 
-	// Creazione del campo tema
-	theme := textinput.New()
-	theme.Placeholder = "Seleziona il tema (default, dark, light)"
-	theme.CharLimit = 10
-	theme.Width = 30
+	teamId := textinput.New()
+	teamId.Placeholder = "Inserisci il team ID"
+	teamId.CharLimit = 32
+	teamId.Width = 60
+	teamId.SetValue(config.TeamId)
 
-	// Raccoglie tutti gli input
-	inputs := []textinput.Model{username, theme}
+	userId := textinput.New()
+	userId.Placeholder = "Inserisci il tuo user ID"
+	userId.CharLimit = 32
+	userId.Width = 60
+	userId.SetValue(config.UserId)
 
-	return SettingsModel{
-		username:   username,
-		theme:      theme,
+	viewId := textinput.New()
+	viewId.Placeholder = "Inserisci la view ID"
+	viewId.CharLimit = 32
+	viewId.Width = 60
+	viewId.SetValue(config.ViewId)
+
+	inputs := []textinput.Model{token, teamId, userId, viewId}
+
+	m := SettingsModel{
+		token:      token,
+		teamId:     teamId,
+		userId:     userId,
+		viewId:     viewId,
 		inputs:     inputs,
 		focusIndex: 0,
+		width:      100,
+		height:     30,
 	}
+
+	// Imposta il focus iniziale
+	m.inputs[m.focusIndex].Focus()
+	return m
 }
 
-// Init inizializza il modello
 func (m SettingsModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-// Update aggiorna il modello in base ai messaggi ricevuti
-func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
-	var cmds []tea.Cmd
-
+func (m SettingsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -59,91 +75,84 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "tab", "shift+tab", "enter", "up", "down":
-			// Gestisce la navigazione tra i campi
-			s := msg.String()
-
-			// Ciclo attraverso i campi quando si preme tab
-			if s == "tab" || s == "enter" || s == "down" {
-				m.focusIndex = (m.focusIndex + 1) % len(m.inputs)
-			} else if s == "shift+tab" || s == "up" {
-				m.focusIndex = (m.focusIndex - 1 + len(m.inputs)) % len(m.inputs)
+		case "enter":
+			c := clients.Config{
+				ClickupToken: m.token.Value(),
+				TeamId:       m.teamId.Value(),
+				UserId:       m.userId.Value(),
+				ViewId:       m.viewId.Value(),
 			}
+			clients.SaveConfig(c)
+			return m, tea.Quit
+		case "down":
+			m.focusIndex++
+		case "up":
+			m.focusIndex--
+		}
 
-			// Aggiorna lo stato di focus per tutti gli input
-			for i := 0; i < len(m.inputs); i++ {
-				if i == m.focusIndex {
-					// Questo campo deve essere focalizzato
-					cmds = append(cmds, m.inputs[i].Focus())
-					m.inputs[i] = m.inputs[i]
-					cmds = append(cmds, m.inputs[i].Focus())
-				} else {
-					// Questo campo deve perdere il focus
-					m.inputs[i].Blur()
-					m.inputs[i].Blur()
-				}
-			}
+		if m.focusIndex >= len(m.inputs) {
+			m.focusIndex = 0
+		} else if m.focusIndex < 0 {
+			m.focusIndex = len(m.inputs) - 1
+		}
 
-			return m, tea.Batch(cmds...)
+		// Aggiorna il focus
+		m.updateFocus()
+	}
+
+	// Processa gli input
+	m.processInputs(msg)
+
+	return m, nil
+}
+
+func (m *SettingsModel) updateFocus() []tea.Cmd {
+	cmds := make([]tea.Cmd, len(m.inputs))
+	for i := range m.inputs {
+		if i == m.focusIndex {
+			cmds[i] = m.inputs[i].Focus()
+		} else {
+			m.inputs[i].Blur()
 		}
 	}
-
-	// Aggiorna il campo attualmente in focus
-	cmd := m.updateInputs(msg)
-	return m, cmd
+	m.syncFields()
+	return cmds
 }
 
-// updateInputs aggiorna l'input correntemente in focus
-func (m *SettingsModel) updateInputs(msg tea.Msg) tea.Cmd {
-	var cmd tea.Cmd
-
-	// Aggiorna solo l'input che ha il focus
-	m.inputs[m.focusIndex], cmd = m.inputs[m.focusIndex].Update(msg)
-
-	// Sincronizza lo stato del modello con gli input aggiornati
-	m.username = m.inputs[0]
-	m.theme = m.inputs[1]
-
-	return cmd
+func (m *SettingsModel) processInputs(msg tea.Msg) []tea.Cmd {
+	cmds := make([]tea.Cmd, len(m.inputs))
+	for i := range m.inputs {
+		m.inputs[i], cmds[i] = m.inputs[i].Update(msg)
+	}
+	m.syncFields()
+	return cmds
 }
 
-// View renderizza l'interfaccia utente
+func (m *SettingsModel) syncFields() {
+	m.token = m.inputs[0]
+	m.teamId = m.inputs[1]
+	m.userId = m.inputs[2]
+}
+
 func (m SettingsModel) View() string {
 	if m.width == 0 {
-		return "Inizializzazione..."
+		return "Loading..."
 	}
 
-	// Titolo della sezione
-	title := ui.TitleStyle.Render("Impostazioni")
-
-	// Prepara le label
+	title := ui.TitleStyle.Render("Impostazioni ClickUp")
 	labelWidth := 15
-	usernameLabel := ui.SubtitleStyle.Width(labelWidth).Render("Username:")
-	themeLabel := ui.SubtitleStyle.Width(labelWidth).Render("Tema:")
 
-	// Prepara gli input
-	usernameInput := m.username.View()
-	themeInput := m.theme.View()
+	inputRows := make([]string, len(m.inputs))
+	for i, input := range m.inputs {
+		label := ui.SubtitleStyle.Width(labelWidth).Render(m.getLabel(i) + ":")
+		inputField := input.View()
+		inputRows[i] = lipgloss.JoinHorizontal(lipgloss.Left, label, inputField)
+	}
 
-	// Formatta ogni riga con label e input
-	usernameRow := lipgloss.JoinHorizontal(lipgloss.Left, usernameLabel, usernameInput)
-	themeRow := lipgloss.JoinHorizontal(lipgloss.Left, themeLabel, themeInput)
-
-	// Unisci tutte le righe
-	formContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		usernameRow,
-		"",
-		themeRow,
-	)
-
-	// Crea un box per il form
+	formContent := lipgloss.JoinVertical(lipgloss.Left, inputRows...)
 	formBox := ui.PanelStyle.Width(m.width - 4).Render(formContent)
+	footer := ui.InfoNotificationStyle.Render("[↑ ↓] move      [enter] save")
 
-	// Crea un footer con informazioni di aiuto
-	footer := ui.InfoNotificationStyle.Render("Tab/Shift+Tab per navigare • Enter per confermare • Esc per tornare")
-
-	// Unisci tutto il contenuto
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
@@ -152,4 +161,12 @@ func (m SettingsModel) View() string {
 		"\n",
 		footer,
 	)
+}
+
+func (m SettingsModel) getLabel(index int) string {
+	labels := []string{"Token", "Team ID", "User ID", "View ID"}
+	if index < len(labels) {
+		return labels[index]
+	}
+	return ""
 }

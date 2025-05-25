@@ -1,160 +1,98 @@
 package app
 
 import (
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/mceck/clickup-tui/internal/clients"
 	"github.com/mceck/clickup-tui/internal/ui/views"
 )
 
-// KeyMap definisce i tasti per le funzionalità dell'applicazione
-type KeyMap struct {
-	Quit     key.Binding
-	Help     key.Binding
-	Back     key.Binding
-	Enter    key.Binding
-	Tab      key.Binding
-	ShiftTab key.Binding
-}
-
-// ShortHelp restituisce i tasti di scelta rapida più importanti
-func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Help, k.Quit}
-}
-
-// FullHelp restituisce tutti i tasti di scelta rapida
-func (k KeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.Help, k.Quit},
-		{k.Back, k.Enter},
-		{k.Tab, k.ShiftTab},
-	}
-}
-
-var DefaultKeyMap = KeyMap{
-	Quit: key.NewBinding(
-		key.WithKeys("q", "ctrl+c"),
-		key.WithHelp("q/ctrl+c", "esci"),
-	),
-	Help: key.NewBinding(
-		key.WithKeys("?"),
-		key.WithHelp("?", "aiuto"),
-	),
-	Back: key.NewBinding(
-		key.WithKeys("esc"),
-		key.WithHelp("esc", "indietro"),
-	),
-	Enter: key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "seleziona"),
-	),
-	Tab: key.NewBinding(
-		key.WithKeys("tab"),
-		key.WithHelp("tab", "avanti"),
-	),
-	ShiftTab: key.NewBinding(
-		key.WithKeys("shift+tab"),
-		key.WithHelp("shift+tab", "indietro"),
-	),
-}
-
-// Page rappresenta le diverse pagine dell'applicazione
 type Page int
 
 const (
 	HomeView Page = iota
 	SettingsView
-	HelpView
+	TimesheetView
 )
 
-// Model è il modello principale dell'applicazione
-type Model struct {
-	keys         KeyMap
-	help         help.Model
-	currentPage  Page
-	homeView     views.HomeModel
-	settingsView views.SettingsModel
-	helpView     views.HelpModel
-	width        int
-	height       int
+type AppModel struct {
+	currentPage Page
+	routes      map[Page]tea.Model
+	width       int
+	height      int
 }
 
-// New crea una nuova istanza del modello principale
-func New() Model {
-	h := help.New()
-	h.ShowAll = false
+func (m AppModel) getCurrentRoute() tea.Model {
+	route := m.routes[m.currentPage]
+	if route == nil {
+		switch m.currentPage {
+		case HomeView:
+			m.routes[m.currentPage] = views.NewHomeModel()
+		case SettingsView:
+			m.routes[m.currentPage] = views.NewSettingsModel()
+		case TimesheetView:
+			m.routes[m.currentPage] = views.NewTimesheetModel()
+		}
+	}
+	return m.routes[m.currentPage]
+}
 
-	return Model{
-		keys:         DefaultKeyMap,
-		help:         h,
-		currentPage:  HomeView,
-		homeView:     views.NewHomeModel(),
-		settingsView: views.NewSettingsModel(),
-		helpView:     views.NewHelpModel(),
+func New() AppModel {
+	return AppModel{
+		currentPage: HomeView,
+		routes:      map[Page]tea.Model{},
 	}
 }
 
-// Init inizializza il modello
-func (m Model) Init() tea.Cmd {
-	return nil
+func (m AppModel) Init() tea.Cmd {
+	config := clients.GetConfig()
+	if config.ClickupToken == "" {
+		m.currentPage = SettingsView
+	}
+	return m.getCurrentRoute().Init()
 }
 
-// Update aggiorna il modello in base ai messaggi ricevuti
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
+func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-
+	m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
+	if cmd != nil {
+		return m, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, m.keys.Quit):
+		switch msg.String() {
+		case "ctrl+c":
 			return m, tea.Quit
-		case key.Matches(msg, m.keys.Help):
-			m.currentPage = HelpView
-			return m, nil
-		case key.Matches(msg, m.keys.Back):
+		case "tab":
+			m.currentPage = TimesheetView
+			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
+		case "?":
+			m.currentPage = SettingsView
+			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
+		case "esc":
 			m.currentPage = HomeView
-			return m, nil
+			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
 		}
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.help.Width = msg.Width
+	}
+	config := clients.GetConfig()
+	if config.ClickupToken == "" {
+		m.currentPage = SettingsView
 	}
 
-	// Gestisce gli aggiornamenti in base alla pagina corrente
-	switch m.currentPage {
-	case HomeView:
-		m.homeView, cmd = m.homeView.Update(msg)
-		cmds = append(cmds, cmd)
-	case SettingsView:
-		m.settingsView, cmd = m.settingsView.Update(msg)
-		cmds = append(cmds, cmd)
-	case HelpView:
-		m.helpView, cmd = m.helpView.Update(msg)
-		cmds = append(cmds, cmd)
-	}
-
-	return m, tea.Batch(cmds...)
+	return m, cmd
 }
 
-// View renderizza l'interfaccia utente
-func (m Model) View() string {
-	switch m.currentPage {
-	case HomeView:
-		return m.homeView.View() + "\n" + m.help.View(m.keys)
-	case SettingsView:
-		return m.settingsView.View() + "\n" + m.help.View(m.keys)
-	case HelpView:
-		return m.helpView.View() + "\n" + m.help.View(m.keys)
-	default:
-		return "Pagina non trovata"
+func (m AppModel) View() string {
+	route := m.routes[m.currentPage]
+	if route == nil {
+		return ""
 	}
+	return route.View()
 }
 
-// NewProgram crea una nuova istanza dell'applicazione
 func NewProgram() *tea.Program {
 	model := New()
 	return tea.NewProgram(model, tea.WithMouseCellMotion(), tea.WithAltScreen())
