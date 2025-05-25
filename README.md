@@ -19,7 +19,7 @@ A modern terminal user interface (TUI) client for [ClickUp](https://clickup.com/
 You can install the latest version directly using Go:
 
 ```sh
-go install github.com/mceck/clickup-tui@latest
+go install github.com/mceck/clickup-tui
 ```
 
 This will place the `clickup-tui` binary in your `$GOBIN` (usually `$HOME/go/bin`). Make sure this directory is in your `PATH`.
