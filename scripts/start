@@ -1,3 +1,3 @@
 #!/bin/bash
 set -e
-go run ./cmd/clickup/main.go "$@"
+go run main.go "$@"

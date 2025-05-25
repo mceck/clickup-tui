@@ -11,6 +11,7 @@ A modern terminal user interface (TUI) client for [ClickUp](https://clickup.com/
 
 ## Prerequisites
 
+- [Go 1.24.2](https://golang.org/dl/) or higher
 - A ClickUp account and API token ([see ClickUp API docs](https://clickup.com/api))
 
 ## Installation
@@ -18,9 +19,12 @@ A modern terminal user interface (TUI) client for [ClickUp](https://clickup.com/
 You can install the latest version directly using Go:
 
 ```sh
-go install github.com/mceck/clickup-tui/cmd/clickup@latest
+go install github.com/mceck/clickup-tui@latest
 ```
 
+This will place the `clickup-tui` binary in your `$GOBIN` (usually `$HOME/go/bin`). Make sure this directory is in your `PATH`.
+
+[GitHub Repository](https://github.com/mceck/clickup-tui)
 
 ## Configuration
 
@@ -58,3 +62,8 @@ Example config:
 - **Timesheet View:**
   - Arrow keys to move between tasks and days
   - Enter to edit hours
+
+## Development
+
+- Format/lint: `go fmt ./...`
+- Clean build artifacts: `go clean`
