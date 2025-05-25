@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mceck/clickup-tui/internal/clients"
 	"github.com/mceck/clickup-tui/internal/shared"
+	ui "github.com/mceck/clickup-tui/internal/ui/styles"
 	"golang.org/x/term"
 )
 
@@ -215,9 +216,9 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update modal viewports if modal is open
 		if m.showModal {
 			m.commentsViewport.Width = m.width - 11
-			m.commentsViewport.Height = 8
+			m.commentsViewport.Height = 6
 			m.contentViewport.Width = m.width - 9
-			m.contentViewport.Height = m.height - 23
+			m.contentViewport.Height = m.height - 19
 		}
 
 		return m, nil
@@ -246,11 +247,11 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.modalTask = &t
 						m.showModal = true
 						// Initialize viewports
-						contentHeight := m.height - 23 // Same as content style height
-						commentsHeight := 8            // Same as comments style height
+						contentHeight := m.height - 19 // Same as content style height
+						commentsHeight := 6            // Same as comments style height
 						m.contentViewport = viewport.New(m.width-9, contentHeight)
 						m.contentViewport.YPosition = 0
-						m.commentsViewport = viewport.New(m.width-11, commentsHeight-2) // -2 for header
+						m.commentsViewport = viewport.New(m.width-11, commentsHeight) // -2 for header
 						m.commentsViewport.YPosition = 0
 
 						// Set content in viewports
@@ -299,7 +300,7 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								" ",
 								lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render(shared.ToElapsedTime(comment.Date)),
 							)
-							commentLine := lipgloss.NewStyle().Width(m.width - 15).Render(RenderCommentText(comment.Comment))
+							commentLine := lipgloss.NewStyle().Width(m.width - 16).Render(RenderCommentText(comment.Comment))
 							commentsContent = append(commentsContent, commentHeader)
 							commentsContent = append(commentsContent, commentLine)
 						}
@@ -355,13 +356,13 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-		case "pgup", "pgdown":
+		case "j", "k":
 			if m.showModal {
 				var cmd tea.Cmd
 				switch msg.String() {
-				case "pgup":
+				case "j":
 					m.commentsViewport.ScrollUp(1)
-				case "pgdown":
+				case "k":
 					m.commentsViewport.ScrollDown(1)
 				}
 				return m, cmd
@@ -639,18 +640,24 @@ func (m HomeModel) View() string {
 
 	finalView := lipgloss.JoinHorizontal(lipgloss.Top, renderedColumns...)
 
+	// Render the title using the shared TitleStyle and center it
+	title := ui.TitleStyle.Render("ClickUp View")
+	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
+
+	finalViewWithTitle := lipgloss.JoinVertical(lipgloss.Left, title, finalView)
+
 	// Calculate space needed to push help bar to bottom with minimal spacing
 	var helpText string
 	if m.showModal {
-		helpText = helpStyle.Render("[↑/↓] scroll content    [pgup/pgdn] scroll comments    [enter/esc] close")
+		helpText = helpStyle.Render("[↑/↓] scroll content    [j/k] scroll comments    [enter/esc] close")
 	} else {
 		helpText = helpStyle.Render("[← → ↑ ↓] navigate    [enter] Task Details    [tab] Timesheet    [q] quit")
 	}
-	contentHeight := lipgloss.Height(finalView)
+	contentHeight := lipgloss.Height(finalViewWithTitle)
 	paddingHeight := m.height - contentHeight - 1 // -1 for help bar (which includes its own newline)
 
 	if paddingHeight > 0 {
-		finalView += strings.Repeat("\n", paddingHeight)
+		finalViewWithTitle += strings.Repeat("\n", paddingHeight)
 	}
 
 	// Render modal if it's active
@@ -676,9 +683,7 @@ func (m HomeModel) View() string {
 
 		// Status and assignees styles
 		metaRowStyle := lipgloss.NewStyle().
-			Width(m.width - 6).
-			MarginTop(1).
-			MarginBottom(1)
+			Width(m.width - 6)
 
 		statusStyle := lipgloss.NewStyle().
 			Background(lipgloss.Color(m.modalTask.Status.Color)).
@@ -745,13 +750,12 @@ func (m HomeModel) View() string {
 		// Return the view with the modal
 		return lipgloss.JoinVertical(
 			lipgloss.Left,
-			"DOS - Flusso di lavoro",
 			renderedModal,
 			helpText,
 		)
 	}
 
-	return "DOS - Flusso di lavoro\n" + finalView + helpText
+	return finalViewWithTitle + helpText
 }
 
 // RenderCommentText renders a slice of CommentText as a formatted string using lipgloss.

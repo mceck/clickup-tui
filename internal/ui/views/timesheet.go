@@ -500,6 +500,7 @@ func (m TimesheetModel) View() string {
 		Padding(0, 1)
 
 	title := ui.TitleStyle.Render("Weekly Timesheet")
+	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
 	for i := 1; i < 6; i++ {
 		m.weekDays[i-1] = m.weekFrom.AddDate(0, 0, i-1).Format("Mon 2")
 	}
