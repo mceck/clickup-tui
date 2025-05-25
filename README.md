@@ -51,7 +51,7 @@ Example config:
 ## Usage
 
 - **Navigation:**
-  - `Tab/Esc`: Switch between Home and Timesheet views
+  - `Tab`: Switch between Home and Timesheet views
   - `?`: Open Settings view
   - `Ctrl+C` or `q`: Quit
   - `r` refresh

@@ -64,13 +64,14 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "tab":
-			m.currentPage = TimesheetView
+			if m.currentPage == HomeView {
+				m.currentPage = TimesheetView
+			} else {
+				m.currentPage = HomeView
+			}
 			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
 		case "?":
 			m.currentPage = SettingsView
-			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
-		case "esc":
-			m.currentPage = HomeView
 			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
 		}
 	case tea.WindowSizeMsg:
