@@ -25,6 +25,9 @@ type KColumn struct {
 	tasks   []clients.Task
 }
 
+type LoadTasksMsg struct {
+}
+
 type taskLoadedMsg struct {
 	tasks []clients.Task
 	err   error
@@ -158,6 +161,9 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.loading {
 		switch msg := msg.(type) {
+		case LoadTasksMsg:
+			return m, tea.Batch(fetchTasks, m.spinner.Tick)
+			
 		case taskLoadedMsg:
 			if msg.err != nil {
 				fmt.Println("Error fetching tasks:", msg.err)

@@ -39,7 +39,7 @@ func (m AppModel) getCurrentRoute() tea.Model {
 
 func New() AppModel {
 	return AppModel{
-		currentPage: HomeView,
+		currentPage: TimesheetView,
 		routes:      map[Page]tea.Model{},
 	}
 }
@@ -69,7 +69,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.currentPage = HomeView
 			}
-			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
+			if m.routes[m.currentPage] == nil {
+				m.routes[m.currentPage] = m.getCurrentRoute()
+				m.routes[m.currentPage], cmd =m.routes[m.currentPage].Update(views.LoadTasksMsg{})
+			}
 		case "?":
 			m.currentPage = SettingsView
 			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
