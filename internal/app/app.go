@@ -71,7 +71,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.routes[m.currentPage] == nil {
 				m.routes[m.currentPage] = m.getCurrentRoute()
-				m.routes[m.currentPage], cmd =m.routes[m.currentPage].Update(views.LoadTasksMsg{})
+				m.routes[m.currentPage], cmd = m.routes[m.currentPage].Update(views.LoadMsg{})
 			}
 		case "?":
 			m.currentPage = SettingsView

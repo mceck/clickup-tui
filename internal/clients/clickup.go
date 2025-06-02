@@ -390,7 +390,6 @@ func (c *ClickupClient) UpdateTracking(userId string, taskId string, day time.Ti
 		return err
 	}
 
-	c.GetTimesheetsEntries(userId)
 	return nil
 }
 

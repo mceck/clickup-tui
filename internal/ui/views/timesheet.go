@@ -8,6 +8,7 @@ import (
 
 	"os"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mceck/clickup-tui/internal/clients"
@@ -49,6 +50,13 @@ type TimesheetModel struct {
 	searchMode    bool
 	searchQuery   string
 	searched      []TimeEntryR
+	loading       bool
+	spinner       spinner.Model
+}
+
+type loadedTimesheetMsg struct {
+	timesheet []TimeEntryR
+	err       error
 }
 
 var DAYS = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
@@ -105,7 +113,7 @@ func calculateWindowSize(height int) int {
 	return wndwSize
 }
 
-func NewTimesheetModel() TimesheetModel {
+func fetchTimesheetEntries() tea.Msg {
 	config := clients.GetConfig()
 	client := clients.NewClickupClient(config.ClickupToken, config.TeamId)
 	userId := config.UserId
@@ -113,12 +121,18 @@ func NewTimesheetModel() TimesheetModel {
 	tasks, err := client.GetTimesheetTasks()
 	if err != nil {
 		fmt.Println("Error fetching tasks:", err)
-		return TimesheetModel{}
+		return loadedTimesheetMsg{
+			timesheet: nil,
+			err:       err,
+		}
 	}
 	trackings, err := client.GetTimesheetsEntries(userId)
 	if err != nil {
 		fmt.Println("Error fetching timesheets:", err)
-		return TimesheetModel{}
+		return loadedTimesheetMsg{
+			timesheet: nil,
+			err:       err,
+		}
 	}
 
 	datats := make([]TimeEntryR, len(tasks))
@@ -143,9 +157,14 @@ func NewTimesheetModel() TimesheetModel {
 		}
 	}
 
-	weekFrom := time.Now().AddDate(0, 0, -int(time.Now().Weekday())+1)
-	datats = SortTimesheetEntries(datats, weekFrom)
+	return loadedTimesheetMsg{
+		timesheet: datats,
+		err:       nil,
+	}
+}
 
+func NewTimesheetModel() TimesheetModel {
+	weekFrom := time.Now().AddDate(0, 0, -int(time.Now().Weekday())+1)
 	// Get initial terminal size
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
@@ -153,16 +172,22 @@ func NewTimesheetModel() TimesheetModel {
 		height = 24 // fallback height
 	}
 
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 	model := TimesheetModel{
 		width:         width,
 		height:        height, // usa le dimensioni effettive del terminale
 		wndwSize:      calculateWindowSize(height),
 		wndwOffset:    0,
-		timesheet:     datats,
+		timesheet:     []TimeEntryR{},
 		weekFrom:      weekFrom,
 		weekDays:      []string{"Mon", "Tue", "Wed", "Thu", "Fri"},
 		cellPositions: make([][]position, 0),
 		firstEdit:     false,
+		loading:       true,
+		spinner:       s,
 		cursorPos:     0,
 	}
 	model.cursor.row = 0
@@ -172,56 +197,46 @@ func NewTimesheetModel() TimesheetModel {
 
 // Init inizializza il modello
 func (m TimesheetModel) Init() tea.Cmd {
+	if m.loading {
+		return tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+	}
 	return nil
 }
 
 // Update aggiorna il modello in base ai messaggi ricevuti
 func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+
+	if m.loading {
+		switch msg := msg.(type) {
+		case loadedTimesheetMsg:
+			if msg.err != nil {
+				return m, tea.Quit
+			}
+			m.loading = false
+			m.timesheet = SortTimesheetEntries(msg.timesheet, m.weekFrom)
+			m.searched = FilterTs(m.timesheet, m.searchQuery)
+			return m, nil
+		case spinner.TickMsg:
+			var spinnerCmd tea.Cmd
+			m.spinner, spinnerCmd = m.spinner.Update(msg)
+			return m, spinnerCmd
+		}
+	}
+
 	switch msg := msg.(type) {
+	case LoadMsg:
+		return m, tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
 	case tea.KeyMsg:
 		if msg.String() == "q" && !m.editing && !m.searchMode {
 			return m, tea.Quit
 		}
 		if msg.String() == "r" && !m.editing && !m.searchMode {
-			config := clients.GetConfig()
-			client := clients.NewClickupClient(config.ClickupToken, config.TeamId)
-			userId := config.UserId
-
 			clients.ClearTimesheetTasksCache()
 			clients.ClearTimeentriesCache()
 
-			tasks, err := client.GetTimesheetTasks()
-			if err != nil {
-				return m, nil
-			}
-			trackings, err := client.GetTimesheetsEntries(userId)
-			if err != nil {
-				return m, nil
-			}
-
-			datats := make([]TimeEntryR, len(tasks))
-			for i, task := range tasks {
-				datats[i] = TimeEntryR{
-					TaskId:   task.Id,
-					TaskName: task.Name,
-					Hours:    make(map[string]float64),
-				}
-				for _, tracking := range trackings {
-					taskId, ok := tracking.Task.(map[string]interface{})
-					if ok {
-						taskIdStr, ok := taskId["id"].(string)
-						if ok && taskIdStr == task.Id {
-							day := shared.ToDateString(tracking.Start)
-							hours := shared.ToHours(tracking.Duration)
-							datats[i].Hours[day] += hours
-						}
-					}
-				}
-			}
-
-			m.timesheet = SortTimesheetEntries(datats, m.weekFrom)
-			return m, nil
+			m.loading = true
+			return m, tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
 		}
 		switch msg.String() {
 		case "esc":
@@ -257,11 +272,8 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					err := client.UpdateTracking(config.UserId, taskId, day, newHours)
 					if err == nil {
-						for i := range m.timesheet {
-							if m.timesheet[i].TaskId == taskId {
-								m.timesheet[i].Hours[dayKey] = newHours
-							}
-						}
+						m.timesheet[taskIdx].Hours[dayKey] = newHours
+						m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
 						m.searched = FilterTs(m.timesheet, m.searchQuery)
 					}
 				}
@@ -495,6 +507,17 @@ func (m TimesheetModel) View() string {
 	if m.width == 0 {
 		return "Initializing..."
 	}
+	if m.loading {
+		loadingStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#874BFD")).
+			MarginLeft(2)
+
+		content := loadingStyle.Render("Caricamento timesheet... ") + m.spinner.View()
+
+		return content
+	}
+
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888")).
 		Padding(0, 1)

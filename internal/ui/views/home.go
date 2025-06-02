@@ -25,7 +25,7 @@ type KColumn struct {
 	tasks   []clients.Task
 }
 
-type LoadTasksMsg struct {
+type LoadMsg struct {
 }
 
 type taskLoadedMsg struct {
@@ -161,9 +161,6 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.loading {
 		switch msg := msg.(type) {
-		case LoadTasksMsg:
-			return m, tea.Batch(fetchTasks, m.spinner.Tick)
-			
 		case taskLoadedMsg:
 			if msg.err != nil {
 				fmt.Println("Error fetching tasks:", msg.err)
@@ -213,6 +210,8 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case LoadMsg:
+		return m, tea.Batch(fetchTasks, m.spinner.Tick)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
