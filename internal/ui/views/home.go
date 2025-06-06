@@ -624,7 +624,7 @@ func (m HomeModel) View() string {
 			lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color(getStatusColor(state))).
-				Render(strings.ToUpper(state)),
+				Render(strings.ToUpper(state + " (" + fmt.Sprint(len(tasks)) + ")")),
 		)
 
 		column := style.Render(
