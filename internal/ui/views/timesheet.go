@@ -730,9 +730,14 @@ func (m TimesheetModel) View() string {
 
 	var help string
 	if m.searchMode {
-		help = "Search: " + m.searchQuery
+		help = lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			lipgloss.NewStyle().Width(m.width-72).Render("Search: "+m.searchQuery),
+
+			"[esc] Exit Search    [← ↑ → ↓] Navigate    [enter/click] Edit/Save",
+		)
 	} else {
-		help = "[← ↑ → ↓] navigate    [enter/click] Edit/Save    [/] Search    [esc] Tasks View"
+		help = "[← ↑ → ↓] Navigate    [enter/click] Edit/Save    [/] Search    [tab] Tasks View"
 	}
 
 	// Calcola lo spazio disponibile e aggiungi padding per centrare verticalmente
