@@ -271,10 +271,26 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						taskId = m.timesheet[taskIdx].TaskId
 					}
 					err := client.UpdateTracking(config.UserId, taskId, day, newHours)
-					if err == nil {
-						m.timesheet[taskIdx].Hours[dayKey] = newHours
-						m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
-						m.searched = FilterTs(m.timesheet, m.searchQuery)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error updating tracking for task %s on day %s: %v\n", taskId, dayKey, err)
+					} else {
+						updated := false
+						for i := range m.timesheet {
+							if m.timesheet[i].TaskId == taskId {
+								if m.timesheet[i].Hours == nil { // Ensure the map is initialized
+									m.timesheet[i].Hours = make(map[string]float64)
+								}
+								m.timesheet[i].Hours[dayKey] = newHours
+								updated = true
+								break
+							}
+						}
+						if updated {
+							m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
+							m.searched = FilterTs(m.timesheet, m.searchQuery)
+						} else {
+							fmt.Fprintf(os.Stderr, "Error: TaskId %s not found in local timesheet after successful API update for day %s\n", taskId, dayKey)
+						}
 					}
 				}
 				m.editing = false
