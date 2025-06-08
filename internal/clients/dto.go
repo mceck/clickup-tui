@@ -35,14 +35,15 @@ type Tag struct {
 }
 
 type Task struct {
-	Id            string `json:"id"`
-	Name          string `json:"name"`
-	Description   string `json:"markdown_description"`
-	Status        Status `json:"status"`
-	Assignees     []User `json:"assignees"`
-	List          List   `json:"list"`
-	Tags          []Tag  `json:"tags"`
-	SubTasksCount int    `json:"subtasks_count"`
+	Id            string    `json:"id"`
+	Name          string    `json:"name"`
+	Description   string    `json:"markdown_description"`
+	Status        Status    `json:"status"`
+	Assignees     []User    `json:"assignees"`
+	List          List      `json:"list"`
+	Tags          []Tag     `json:"tags"`
+	SubTasksCount int       `json:"subtasks_count"`
+	Comments      []Comment `json:"comments,omitempty"`
 }
 
 // CommentText represents a part of a comment, with text and attributes.

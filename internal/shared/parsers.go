@@ -2,6 +2,7 @@ package shared
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -65,4 +66,23 @@ func ToElapsedTime(s string) string {
 		return fmt.Sprintf("%dh", hours)
 	}
 	return fmt.Sprintf("%dd", days)
+}
+
+func LightenColor(color string, percentage float64) string {
+	// color is a hex color #RRGGBB
+	// lighten it by 20%
+	// return the new color
+	r, g, b := hexToRGB(color)
+	r = int(float64(r) + float64(255-r)*percentage)
+	g = int(float64(g) + float64(255-g)*percentage)
+	b = int(float64(b) + float64(255-b)*percentage)
+	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
+}
+
+func hexToRGB(s string) (int, int, int) {
+	s = strings.TrimPrefix(s, "#")
+	r, _ := strconv.ParseUint(s[:2], 16, 8)
+	g, _ := strconv.ParseUint(s[2:4], 16, 8)
+	b, _ := strconv.ParseUint(s[4:], 16, 8)
+	return int(r), int(g), int(b)
 }
