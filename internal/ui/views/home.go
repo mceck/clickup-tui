@@ -194,14 +194,20 @@ func (m HomeModel) View() string {
 	if m.showModal {
 		helpText = helpStyle.Render("\n[↑/↓] scroll content    [j/k] scroll comments    [enter/esc] close")
 	} else {
-		helpText = helpStyle.Render("[← → ↑ ↓] navigate    [enter] Task Details    [tab] Timesheet    [r] refresh    [q] quit")
+		helpText = helpStyle.Render("\n[← → ↑ ↓] navigate    [enter] Task Details    [tab] Timesheet    [r] refresh    [q] quit")
 	}
 
 	paddingHeight := m.height - lipgloss.Height(mainView)
-	if paddingHeight < 0 {
-		paddingHeight = 0
+	// Ensure paddingHeight is not negative before subtracting 1 for strings.Repeat
+	repeatCount := paddingHeight - 1
+	if repeatCount < 0 {
+		repeatCount = 0
 	}
-	return mainView + strings.Repeat("\n", paddingHeight-1) + helpText
+	// If mainView itself is taller than m.height, we might not want any padding or just the helpText
+	if lipgloss.Height(mainView) >= m.height-lipgloss.Height(helpText) {
+		return mainView + "\n" + helpText // Ensure helpText is on a new line if mainView is too tall
+	}
+	return mainView + strings.Repeat("\n", repeatCount) + helpText
 }
 
 func (m HomeModel) viewInputScreen() string {
@@ -245,25 +251,60 @@ func (m HomeModel) renderColumn(state string, isSelected bool) string {
 	headerText := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(color)).Render(fmt.Sprintf("%s (%d)", strings.ToUpper(state), len(colData.tasks)))
 	header := headerStyle.Render(headerText)
 
-	renderedTasks := make([]string, 0)
-	visibleTasks := colData.tasks[colData.offsetY:min(colData.offsetY+m.wndY, len(colData.tasks))]
+	// Determine scrollability for tasks
+	canScrollUp := colData.offsetY > 0
+	canScrollDown := (colData.offsetY + m.wndY) < len(colData.tasks)
+
+	renderedTasksStrings := make([]string, 0)
+	startTaskIdx := colData.offsetY
+	endTaskIdx := min(colData.offsetY+m.wndY, len(colData.tasks))
+	visibleTasks := colData.tasks[startTaskIdx:endTaskIdx]
+
 	for j, task := range visibleTasks {
 		isTaskSelected := isSelected && m.selectedTask == j+colData.offsetY
-		renderedTasks = append(renderedTasks, m.renderTask(task, isTaskSelected, color))
+		highlightTopBorder := (j == 0 && canScrollUp)
+		highlightBottomBorder := (j == len(visibleTasks)-1 && canScrollDown)
+		renderedTasksStrings = append(renderedTasksStrings, m.renderTask(task, isTaskSelected, color, highlightTopBorder, highlightBottomBorder))
 	}
 
-	colStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(color)).Padding(0, 1).Width(columnWidth)
+	tasksView := lipgloss.JoinVertical(lipgloss.Left, renderedTasksStrings...)
+
+	// Base style for the column
+	colStyle := lipgloss.NewStyle().
+		Padding(0, 1).
+		Width(columnWidth).
+		BorderForeground(lipgloss.Color(color)) // Set base border color for the column
+
+	// Set border style based on selection
 	if isSelected {
 		colStyle = colStyle.BorderStyle(lipgloss.DoubleBorder())
+	} else {
+		colStyle = colStyle.BorderStyle(lipgloss.RoundedBorder())
 	}
-	return colStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, lipgloss.JoinVertical(lipgloss.Left, renderedTasks...)))
+
+	return colStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, tasksView))
 }
 
-func (m HomeModel) renderTask(task clients.Task, isSelected bool, statusColor string) string {
-	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#4A4A4A")).Padding(0, 1).Width(columnWidth - 4)
+func (m HomeModel) renderTask(task clients.Task, isSelected bool, statusColor string, highlightTopBorderForScroll bool, highlightBottomBorderForScroll bool) string {
+	scrollHighlightColor := lipgloss.Color("#ffffff")
+	defaultTaskBorderColor := lipgloss.Color("#4A4A4A")
+
+	style := lipgloss.NewStyle().Padding(0, 1).Width(columnWidth - 4)
+
+	// Apply selection styling first
 	if isSelected {
 		highlightColor := shared.LightenColor(statusColor, 0.8)
 		style = style.BorderForeground(lipgloss.Color(highlightColor)).BorderStyle(lipgloss.DoubleBorder())
+	} else {
+		style = style.BorderForeground(defaultTaskBorderColor).BorderStyle(lipgloss.RoundedBorder())
+	}
+
+	// Apply scroll indication border colors, potentially overriding parts of selection border
+	if highlightTopBorderForScroll {
+		style = style.BorderTopForeground(scrollHighlightColor)
+	}
+	if highlightBottomBorderForScroll {
+		style = style.BorderBottomForeground(scrollHighlightColor)
 	}
 
 	var assignees []string
@@ -278,7 +319,7 @@ func (m HomeModel) renderTask(task clients.Task, isSelected bool, statusColor st
 	var tags []string
 	for _, t := range task.Tags {
 		fgColor := t.TagFg
-		if fgColor == "" || fgColor == t.TagBg {
+		if fgColor == "" {
 			fgColor = "#ffffff"
 		}
 		tags = append(tags, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(t.TagBg)).Foreground(lipgloss.Color(fgColor)).Padding(0, 1).MarginRight(1).Render(t.Name))
@@ -301,10 +342,12 @@ func (m HomeModel) renderTask(task clients.Task, isSelected bool, statusColor st
 func (m HomeModel) viewModal() string {
 	task := m.modalTask
 	statusColor := task.Status.Color
-	modalStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(statusColor)).Padding(1, 2).Width(m.width - 3).Align(lipgloss.Left)
+	scrollHighlightColor := lipgloss.Color("#ffffff") // As per user's recent change in renderTask
+
+	modalStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(statusColor)).Padding(0, 2).Width(m.width - 3).Align(lipgloss.Left)
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(statusColor)).Width(m.width - 6).Align(lipgloss.Left)
-	listStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).MarginBottom(1)
+	listStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 	header := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(task.Name), listStyle.Render("📁 "+task.List.Name))
 
 	var metaInfo []string
@@ -318,11 +361,28 @@ func (m HomeModel) viewModal() string {
 	}
 	metaRow := lipgloss.NewStyle().Width(m.width - 6).Render(lipgloss.JoinHorizontal(lipgloss.Left, metaInfo...))
 
+	// Content Viewport with scroll indication
+	contentViewStyle := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#4A4A4A")) // Default border for content
+	if !m.contentViewport.AtTop() {
+		contentViewStyle = contentViewStyle.BorderTopForeground(scrollHighlightColor)
+	}
+	if !m.contentViewport.AtBottom() {
+		contentViewStyle = contentViewStyle.BorderBottomForeground(scrollHighlightColor)
+	}
+	styledContentView := contentViewStyle.Render(m.contentViewport.View())
+
+	// Comments Viewport with scroll indication
 	commentsSectionStyle := lipgloss.NewStyle().Width(m.width-9).Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#666666")).Padding(0, 1)
+	if !m.commentsViewport.AtTop() {
+		commentsSectionStyle = commentsSectionStyle.BorderTopForeground(scrollHighlightColor)
+	}
+	if !m.commentsViewport.AtBottom() {
+		commentsSectionStyle = commentsSectionStyle.BorderBottomForeground(scrollHighlightColor)
+	}
 	commentHeaderStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#888888")).MarginBottom(1)
 	comments := commentsSectionStyle.Render(lipgloss.JoinVertical(lipgloss.Left, commentHeaderStyle.Render("Comments"), m.commentsViewport.View()))
 
-	modalContent := lipgloss.JoinVertical(lipgloss.Left, header, metaRow, m.contentViewport.View(), comments)
+	modalContent := lipgloss.JoinVertical(lipgloss.Left, header, metaRow, styledContentView, comments)
 	return modalStyle.Render(modalContent)
 }
 
@@ -405,7 +465,7 @@ func (m HomeModel) handleWindowSizeEvent(msg tea.WindowSizeMsg) (tea.Model, tea.
 	m.wndX, m.wndY = calculateWindowDimensions(m.width, m.height)
 	if m.showModal {
 		m.contentViewport.Width = m.width - 9
-		m.contentViewport.Height = m.height - 20
+		m.contentViewport.Height = m.height - 19
 		m.commentsViewport.Width = m.width - 11
 		m.commentsViewport.Height = 6
 	}
@@ -481,7 +541,7 @@ func (m HomeModel) handleKeyMainEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modalTask = &t
 			m.showModal = true
 
-			m.contentViewport = viewport.New(m.width-9, m.height-20)
+			m.contentViewport = viewport.New(m.width-9, m.height-19)
 			m.commentsViewport = viewport.New(m.width-11, 6)
 
 			var renderedMarkdown string
