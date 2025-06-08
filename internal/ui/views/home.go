@@ -319,7 +319,7 @@ func (m HomeModel) renderTask(task clients.Task, isSelected bool, statusColor st
 	var tags []string
 	for _, t := range task.Tags {
 		fgColor := t.TagFg
-		if fgColor == "" {
+		if fgColor == "" || fgColor == t.TagBg {
 			fgColor = "#000000"
 		}
 		tags = append(tags, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(t.TagBg)).Foreground(lipgloss.Color(fgColor)).Padding(0, 1).MarginRight(1).Render(t.Name))
