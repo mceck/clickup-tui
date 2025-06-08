@@ -313,14 +313,14 @@ func (m HomeModel) renderTask(task clients.Task, isSelected bool, statusColor st
 		if bgColor == "" {
 			bgColor = "#888888"
 		}
-		assignees = append(assignees, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(bgColor)).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).MarginRight(1).Render(a.Initials))
+		assignees = append(assignees, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(bgColor)).Foreground(lipgloss.Color("#000000")).Padding(0, 1).MarginRight(1).Render(a.Initials))
 	}
 
 	var tags []string
 	for _, t := range task.Tags {
 		fgColor := t.TagFg
 		if fgColor == "" {
-			fgColor = "#ffffff"
+			fgColor = "#000000"
 		}
 		tags = append(tags, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(t.TagBg)).Foreground(lipgloss.Color(fgColor)).Padding(0, 1).MarginRight(1).Render(t.Name))
 	}
@@ -351,13 +351,25 @@ func (m HomeModel) viewModal() string {
 	header := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(task.Name), listStyle.Render("📁 "+task.List.Name))
 
 	var metaInfo []string
-	metaInfo = append(metaInfo, lipgloss.NewStyle().Background(lipgloss.Color(statusColor)).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).MarginRight(2).Render(task.Status.Status))
+	metaInfo = append(metaInfo, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(statusColor)).Foreground(lipgloss.Color("#000000")).Padding(0, 1).MarginRight(2).Render(strings.ToUpper(task.Status.Status)))
 	for _, a := range task.Assignees {
 		bgColor := a.Color
 		if bgColor == "" {
 			bgColor = "#888888"
 		}
-		metaInfo = append(metaInfo, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(bgColor)).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).MarginRight(1).Render(a.Initials))
+		metaInfo = append(metaInfo, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(bgColor)).Foreground(lipgloss.Color("#000000")).Padding(0, 1).MarginRight(1).Render(a.Initials))
+	}
+	metaInfo = append(metaInfo, "    ")
+	for _, tag := range task.Tags {
+		tagBg := tag.TagBg
+		if tagBg == "" {
+			tagBg = "#555555"
+		}
+		tagFg := tag.TagFg
+		if tagFg == "" {
+			tagFg = "#000000"
+		}
+		metaInfo = append(metaInfo, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(tagBg)).Foreground(lipgloss.Color(tagFg)).Padding(0, 1).MarginRight(1).Render(tag.Name))
 	}
 	metaRow := lipgloss.NewStyle().Width(m.width - 6).Render(lipgloss.JoinHorizontal(lipgloss.Left, metaInfo...))
 
