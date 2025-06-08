@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/mceck/clickup-tui/internal/shared"
@@ -210,18 +211,58 @@ func (c *ClickupClient) GetTimesheetTasks() ([]Task, error) {
 	if cache.TimesheetTasks != nil {
 		return cache.TimesheetTasks, nil
 	}
-	tasks := []Task{}
+	var tasks []Task
 	page := 0
+	const batchSize = 3
+
 	for {
-		res, err := c.getTasksPage(page, "tags[]=timesheet")
-		if err != nil {
+		var wg sync.WaitGroup
+		results := make([]TaskResponse, batchSize)
+		errCh := make(chan error, batchSize)
+		anyLastPageInBatch := false
+
+		for i := 0; i < batchSize; i++ {
+			wg.Add(1)
+			go func(pIdx int, currentPage int) {
+				defer wg.Done()
+				res, err := c.getTasksPage(currentPage, "tags[]=timesheet")
+				if err != nil {
+					errCh <- err
+					return
+				}
+				results[pIdx] = res
+			}(i, page+i)
+		}
+		gwErr := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(gwErr)
+		}()
+
+		select {
+		case <-gwErr:
+		case err := <-errCh:
 			return nil, err
 		}
-		tasks = append(tasks, res.Tasks...)
-		if res.LastPage {
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for i := 0; i < batchSize; i++ {
+			tasks = append(tasks, results[i].Tasks...)
+			if results[i].LastPage {
+				anyLastPageInBatch = true
+				break
+			}
+		}
+
+		if anyLastPageInBatch {
 			break
 		}
-		page++
+		page += batchSize
 	}
 
 	cache.TimesheetTasks = tasks
@@ -236,18 +277,59 @@ func (c *ClickupClient) GetViewTasks(viewId string) ([]Task, error) {
 	if cache.ViewTasks != nil {
 		return cache.ViewTasks, nil
 	}
-	tasks := []Task{}
+	var tasks []Task
 	page := 0
+	const batchSize = 3
+
 	for {
-		res, err := c.getViewPage(page, viewId)
-		if err != nil {
+		var wg sync.WaitGroup
+		results := make([]TaskResponse, batchSize)
+		errCh := make(chan error, batchSize)
+		anyLastPageInBatch := false
+
+		for i := 0; i < batchSize; i++ {
+			wg.Add(1)
+			go func(pIdx int, currentPage int) {
+				defer wg.Done()
+				res, err := c.getViewPage(currentPage, viewId)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				results[pIdx] = res
+			}(i, page+i)
+		}
+
+		gwErr := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(gwErr)
+		}()
+
+		select {
+		case <-gwErr:
+		case err := <-errCh:
 			return nil, err
 		}
-		tasks = append(tasks, res.Tasks...)
-		if res.LastPage {
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for i := 0; i < batchSize; i++ {
+			tasks = append(tasks, results[i].Tasks...)
+			if results[i].LastPage {
+				anyLastPageInBatch = true
+				break
+			}
+		}
+
+		if anyLastPageInBatch {
 			break
 		}
-		page++
+		page += batchSize
 	}
 
 	cache.ViewTasks = tasks
@@ -344,51 +426,45 @@ func (c *ClickupClient) CreateTimeEntry(taskId string, start time.Time, duration
 }
 
 func (c *ClickupClient) UpdateTracking(userId string, taskId string, day time.Time, hours float64) error {
-	entries, err := c.GetTimesheetsEntries(userId)
+	allUserEntries, err := c.GetTimesheetsEntries(userId)
 	if err != nil {
-		return err
+		return fmt.Errorf("UpdateTracking: failed to get timesheet entries: %w", err)
 	}
-	cache.TimeEntries = nil
-	dateEntries := []TimeEntry{}
-	for _, entry := range entries {
-		if entry.Task.(map[string]interface{})["id"] != taskId {
+
+	entriesToDelete := []string{}
+	dayStr := day.Format("2006-01-02")
+
+	for _, entry := range allUserEntries {
+		entryTaskDetails, ok := entry.Task.(map[string]interface{})
+		if !ok {
 			continue
 		}
-		start := shared.ToDate(entry.Start)
-		if start.Format("2006-01-02") == day.Format("2006-01-02") {
-			dateEntries = append(dateEntries, entry)
-		}
-	}
-	total := 0.0
-	toDelete := []TimeEntry{}
-	for _, entry := range dateEntries {
-		h := shared.ToHours(entry.Duration)
-		if total+h > hours {
-			toDelete = append(toDelete, entry)
-			continue
-		}
-		total += h
-	}
-	if len(toDelete) > 0 {
-		for _, entry := range toDelete {
-			err = c.DeleteTimeEntry(taskId, entry.Id)
-			if err != nil {
-				return err
+		entryTaskId, ok := entryTaskDetails["id"].(string)
+		if ok && entryTaskId == taskId {
+			entryStart := shared.ToDate(entry.Start)
+			if entryStart.Format("2006-01-02") == dayStr {
+				entriesToDelete = append(entriesToDelete, entry.Id)
 			}
 		}
 	}
 
-	if total == hours {
-		return nil
+	for _, entryId := range entriesToDelete {
+		err = c.DeleteTimeEntry(taskId, entryId)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "UpdateTracking: failed to delete entry %s for task %s on day %s: %v\n", entryId, taskId, dayStr, err)
+		}
 	}
 
-	diff := hours - total
-	duration := int(diff * 60 * 60 * 1000)
-	start := time.Date(day.Year(), day.Month(), day.Day(), 6, 0, 0, 0, day.Location())
-	err = c.CreateTimeEntry(taskId, start, duration, userId)
-	if err != nil {
-		return err
+	if hours > 0 {
+		durationMs := int(hours * 60 * 60 * 1000)
+		startOfTracking := time.Date(day.Year(), day.Month(), day.Day(), 6, 0, 0, 0, day.Location())
+		err = c.CreateTimeEntry(taskId, startOfTracking, durationMs, userId)
+		if err != nil {
+			return fmt.Errorf("UpdateTracking: failed to create time entry for task %s on day %s: %w", taskId, dayStr, err)
+		}
 	}
+
+	ClearTimeentriesCache()
 
 	return nil
 }

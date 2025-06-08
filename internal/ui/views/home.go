@@ -233,7 +233,7 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q":
 			return m, tea.Quit
 		case "r":
-			clients.ClearCache()
+			clients.ClearViewTasksCache()
 			m.loading = true
 			return m, tea.Batch(fetchTasks, m.spinner.Tick)
 		case "enter":
@@ -656,7 +656,7 @@ func (m HomeModel) View() string {
 	if m.showModal {
 		helpText = helpStyle.Render("[↑/↓] scroll content    [j/k] scroll comments    [enter/esc] close")
 	} else {
-		helpText = helpStyle.Render("[← → ↑ ↓] navigate    [enter] Task Details    [tab] Timesheet    [q] quit")
+		helpText = helpStyle.Render("[← → ↑ ↓] navigate    [enter] Task Details    [tab] Timesheet    [r] refresh    [q] quit")
 	}
 	contentHeight := lipgloss.Height(finalViewWithTitle)
 	paddingHeight := m.height - contentHeight - 1 // -1 for help bar (which includes its own newline)

@@ -192,6 +192,9 @@ func NewTimesheetModel() TimesheetModel {
 	}
 	model.cursor.row = 0
 	model.cursor.col = int(time.Now().Weekday())
+	if model.cursor.col == 0 || model.cursor.col == 6 {
+		model.cursor.col = 1
+	}
 	return model
 }
 
@@ -347,10 +350,12 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.cursor.row < m.wndwOffset {
 						m.wndwOffset--
 					}
-				} else if msg.String() == "down" && m.cursor.row < len(m.timesheet)-1 {
-					m.cursor.row++
-					if m.cursor.row >= m.wndwOffset+m.wndwSize {
-						m.wndwOffset++
+				} else if msg.String() == "down" {
+					if (!m.searchMode && m.cursor.row < len(m.timesheet)-1) || (m.searchMode && m.cursor.row < len(m.searched)-1) {
+						m.cursor.row++
+						if m.cursor.row >= m.wndwOffset+m.wndwSize {
+							m.wndwOffset++
+						}
 					}
 				}
 			}
@@ -425,36 +430,17 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			padding := 2                      // space between columns
 			borderWidth := 0                  // left and right border of each cell
 			totalBordersWidth := numColumns * borderWidth
-			totalPaddingWidth := (numColumns - 1) * padding
+			totalPaddingWidth := numColumns * padding
 			availableWidth := m.width - totalBordersWidth - totalPaddingWidth
 			// Task name column gets more space
 			taskColWidth := availableWidth * 4 / 9
 			// Remaining width divided equally among day columns
 			dayColWidth := availableWidth / 9
 			// Calculate cell positions
-			absoluteX := 0
-			absoluteY := 6 // Start after title (1) + header (3) + totals row (3)
+			currentAbsoluteY := 9 // Start after title (1) + header (3) + totals row (3)
 			for rowIdx := 0; rowIdx < m.wndwSize; rowIdx++ {
-				absoluteX = 0
-				// Task name column position
-				m.cellPositions[rowIdx][0] = position{
-					x:      absoluteX,
-					y:      absoluteY,
-					width:  taskColWidth + borderWidth,
-					height: 3, // Aumentiamo l'altezza per includere i bordi
-				}
-				absoluteX += taskColWidth + borderWidth + padding
-				// Hour columns positions
-				for colIdx := range m.weekDays {
-					m.cellPositions[rowIdx][colIdx+1] = position{
-						x:      absoluteX,
-						y:      absoluteY,
-						width:  dayColWidth + borderWidth + 1,
-						height: 3, // Aumentiamo l'altezza per includere i bordi
-					}
-					absoluteX += dayColWidth + borderWidth + padding
-				}
-				absoluteY += 3 // Incrementiamo di 1 per la prossima riga
+				m.cellPositions[rowIdx] = m.calculateRowCellPositions(taskColWidth, dayColWidth, padding, borderWidth, currentAbsoluteY)
+				currentAbsoluteY += 3 // Increment for the next row
 			}
 
 			// Find which cell was clicked
@@ -518,7 +504,195 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// View renderizza l'interfaccia utente
+func (m TimesheetModel) calculateColumnWidths() (int, int) {
+	numColumns := len(m.weekDays) + 1 // +1 for task name column
+	padding := 2                      // space between columns
+	borderWidth := 0                  // left and right border of each cell
+	totalBordersWidth := numColumns * borderWidth
+	totalPaddingWidth := numColumns * padding
+	availableWidth := m.width - totalBordersWidth - totalPaddingWidth
+	taskColWidth := availableWidth * 4 / 9
+	dayColWidth := availableWidth / 9.0
+	return taskColWidth, dayColWidth
+}
+
+func (m TimesheetModel) initializeStyles(taskColWidth, dayColWidth int) (
+	lipgloss.Style, lipgloss.Style, lipgloss.Style, lipgloss.Style,
+	lipgloss.Style, lipgloss.Style, lipgloss.Style, lipgloss.Style, lipgloss.Style) {
+	headerStyle := ui.SubtitleStyle.Width(dayColWidth).Align(lipgloss.Center).BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240"))
+	taskHeaderStyle := headerStyle.Width(taskColWidth).Foreground(lipgloss.Color("212"))
+
+	cellStyle := lipgloss.NewStyle().
+		Width(dayColWidth).
+		Align(lipgloss.Center).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240"))
+
+	taskCellStyle := cellStyle.
+		Padding(0, 1).
+		Width(taskColWidth).
+		Align(lipgloss.Left)
+
+	selectedStyle := cellStyle.
+		BorderForeground(lipgloss.Color("86")).
+		Bold(true)
+
+	editingStyle := cellStyle.
+		BorderForeground(lipgloss.Color("212")).
+		Bold(true)
+
+	highlightStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("55"))
+
+	selectedTextStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("212")).
+		Foreground(lipgloss.Color("0"))
+
+	cursorStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("212")).
+		Foreground(lipgloss.Color("0"))
+
+	return headerStyle, taskHeaderStyle, cellStyle, taskCellStyle,
+		selectedStyle, editingStyle, highlightStyle, selectedTextStyle, cursorStyle
+}
+
+func (m TimesheetModel) renderHeaderRow(taskHeaderStyle, headerStyle lipgloss.Style) []string {
+	headerRow := []string{taskHeaderStyle.Render(m.weekFrom.Format("January 2006"))}
+	for _, h := range m.weekDays {
+		headerRow = append(headerRow, headerStyle.Render(h))
+	}
+	return headerRow
+}
+
+func (m TimesheetModel) renderHourCell(entry TimeEntryR, day string, rowIdx, colIdx int, cellStyle, editingStyle, selectedStyle, selectedTextStyle, cursorStyle lipgloss.Style) (string, lipgloss.Style) {
+	style := cellStyle
+	content := "-"
+
+	if hours, exists := entry.Hours[day]; exists {
+		content = fmt.Sprintf("%.1f", hours)
+	}
+
+	if rowIdx == m.cursor.row-m.wndwOffset && colIdx+1 == m.cursor.col {
+		if m.editing {
+			style = editingStyle
+			content = m.editBuffer
+			if m.firstEdit {
+				content = selectedTextStyle.Render(content)
+			} else {
+				if m.cursorPos < len(content) {
+					content = content[:m.cursorPos] + cursorStyle.Render(string(content[m.cursorPos])) + content[m.cursorPos+1:]
+				} else {
+					content = content + cursorStyle.Render(" ")
+				}
+			}
+		} else {
+			style = selectedStyle
+		}
+	}
+	return content, style
+}
+
+func (m TimesheetModel) calculateRowCellPositions(taskColWidth, dayColWidth, padding, borderWidth, absoluteY int) []position {
+	rowCellPositions := make([]position, len(m.weekDays)+1)
+	absoluteX := 0
+
+	// Task column position
+	rowCellPositions[0] = position{
+		x:      absoluteX,
+		y:      absoluteY,
+		width:  taskColWidth + borderWidth,
+		height: 3, // Assuming height is constant for now
+	}
+	absoluteX += taskColWidth + borderWidth + padding
+
+	// Day columns positions
+	for colIdx := range m.weekDays {
+		rowCellPositions[colIdx+1] = position{
+			x:      absoluteX,
+			y:      absoluteY,
+			width:  dayColWidth + borderWidth,
+			height: 3, // Assuming height is constant
+		}
+		absoluteX += dayColWidth + borderWidth + padding
+	}
+	return rowCellPositions
+}
+
+func (m TimesheetModel) renderTaskEntryRow(entry TimeEntryR, rowIdx, taskColWidth, dayColWidth, padding, borderWidth, absoluteY int, taskCellStyle, cellStyle, editingStyle, selectedStyle, highlightStyle, selectedTextStyle, cursorStyle lipgloss.Style) ([]string, []position) {
+	row := []string{}
+
+	taskName := entry.TaskName
+	if m.searchMode && len(m.searchQuery) > 0 {
+		lowerTask := strings.ToLower(taskName)
+		lowerQuery := strings.ToLower(m.searchQuery)
+		if idx := strings.Index(lowerTask, lowerQuery); idx >= 0 {
+			before := taskName[:idx]
+			match := taskName[idx : idx+len(m.searchQuery)]
+			after := taskName[idx+len(m.searchQuery):]
+
+			taskName = before + highlightStyle.Render(match) + after
+			fullLength := len(before) + len(match) + len(after)
+			if fullLength > taskColWidth-8 && taskColWidth > 8 {
+				hw := (taskColWidth - 8) / 2
+				taskName = before[:min(len(before), hw)] + ".." + highlightStyle.Render(match[:min(len(match), 9)]) + ".." + after[max(0, len(after)-hw):]
+			}
+		}
+	} else if len(taskName) > taskColWidth-6 {
+		taskName = taskName[:taskColWidth-6] + "..."
+	}
+
+	row = append(row, taskCellStyle.Render(taskName))
+
+	for colIdx := range m.weekDays {
+		day := m.weekFrom.AddDate(0, 0, colIdx).Format("2006-01-02")
+		content, style := m.renderHourCell(entry, day, rowIdx, colIdx, cellStyle, editingStyle, selectedStyle, selectedTextStyle, cursorStyle)
+		row = append(row, style.Render(content))
+	}
+
+	rowCellPositions := m.calculateRowCellPositions(taskColWidth, dayColWidth, padding, borderWidth, absoluteY)
+	return row, rowCellPositions
+}
+
+func (m TimesheetModel) calculateDailyTotals() []float64 {
+	totals := make([]float64, len(m.weekDays))
+	for _, entry := range m.timesheet {
+		for i := range m.weekDays {
+			day := m.weekFrom.AddDate(0, 0, i).Format("2006-01-02")
+			totals[i] += entry.Hours[day]
+		}
+	}
+	return totals
+}
+
+func (m TimesheetModel) renderTotalsRow(totals []float64, taskCellStyle, cellStyle lipgloss.Style) []string {
+	totalRow := []string{taskCellStyle.Foreground(lipgloss.Color("72")).Render("Total")}
+	for _, total := range totals {
+		totalCellStyle := cellStyle.Foreground(lipgloss.Color("208"))
+		if total == 8 {
+			totalCellStyle = totalCellStyle.Foreground(lipgloss.Color("72"))
+		} else if total > 8 {
+			totalCellStyle = totalCellStyle.Foreground(lipgloss.Color("134"))
+		}
+		totalRow = append(totalRow, totalCellStyle.Render(fmt.Sprintf("%.1f", total)))
+	}
+	return totalRow
+}
+
+func (m TimesheetModel) renderHelpText() string {
+	var help string
+	if m.searchMode {
+		help = lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			lipgloss.NewStyle().Width(m.width-72).Render("Search: "+m.searchQuery),
+			"[esc] Exit Search    [← ↑ → ↓] Navigate    [enter/click] Edit/Save",
+		)
+	} else {
+		help = "[← ↑ → ↓] Navigate    [enter/click] Edit/Save    [/] Search    [tab] Tasks View"
+	}
+	return help
+}
+
 func (m TimesheetModel) View() string {
 	if m.width == 0 {
 		return "Initializing..."
@@ -544,67 +718,17 @@ func (m TimesheetModel) View() string {
 		m.weekDays[i-1] = m.weekFrom.AddDate(0, 0, i-1).Format("Mon 2")
 	}
 
-	// Calculate responsive column widths
-	numColumns := len(m.weekDays) + 1 // +1 for task name column
-	padding := 2                      // space between columns
-	borderWidth := 0                  // left and right border of each cell
-	totalBordersWidth := numColumns * borderWidth
-	totalPaddingWidth := (numColumns - 1) * padding
-	availableWidth := m.width - totalBordersWidth - totalPaddingWidth
-	// Task name column gets more space
-	taskColWidth := availableWidth * 4 / 9
-	// Remaining width divided equally among day columns
-	dayColWidth := availableWidth / 9.0
-	// Calculate cell positions
-	absoluteX := 0
-	absoluteY := 7 // Start after title (1) + header (3) + totals row (3)
+	taskColWidth, dayColWidth := m.calculateColumnWidths()
+	padding := 2     // space between columns
+	borderWidth := 0 // left and right border of each cell
+	absoluteY := 9   // Start after title (1) + header (3) + totals row (3)
 
-	// Styles
-	headerStyle := ui.SubtitleStyle.Width(dayColWidth + 2).Align(lipgloss.Center)
-	taskHeaderStyle := headerStyle.Width(taskColWidth + 2).Foreground(lipgloss.Color("212"))
+	headerStyle, taskHeaderStyle, cellStyle, taskCellStyle,
+		selectedStyle, editingStyle, highlightStyle, selectedTextStyle, cursorStyle := m.initializeStyles(taskColWidth, dayColWidth)
 
-	cellStyle := lipgloss.NewStyle().
-		Width(dayColWidth).
-		Align(lipgloss.Center).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240"))
+	headerRow := m.renderHeaderRow(taskHeaderStyle, headerStyle)
 
-	taskCellStyle := cellStyle.
-		Inline(true).
-		Width(taskColWidth).
-		Align(lipgloss.Left)
-
-	selectedStyle := cellStyle.
-		BorderForeground(lipgloss.Color("86")).
-		Bold(true)
-
-	editingStyle := cellStyle.
-		BorderForeground(lipgloss.Color("212")).
-		Bold(true)
-
-	highlightStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("55"))
-
-	// Add a selected text style
-	selectedTextStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("212")).
-		Foreground(lipgloss.Color("0"))
-
-	// Add cursor style
-	cursorStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("212")).
-		Foreground(lipgloss.Color("0"))
-
-	// Create header row
-	headerRow := []string{taskHeaderStyle.Render(m.weekFrom.Format("January 2006"))}
-	for _, h := range m.weekDays {
-		headerRow = append(headerRow, headerStyle.Render(h))
-	}
-
-	// Reset cell positions tracking
 	m.cellPositions = make([][]position, m.wndwSize)
-
-	// Create task rows
 	var rows []string
 	var wndw []TimeEntryR
 	if m.searchMode {
@@ -612,115 +736,18 @@ func (m TimesheetModel) View() string {
 	} else {
 		wndw = m.timesheet[m.wndwOffset:min(m.wndwOffset+m.wndwSize, len(m.timesheet))]
 	}
+
+	currentAbsoluteY := absoluteY
 	for rowIdx, entry := range wndw {
-		row := []string{}
-		m.cellPositions[rowIdx] = make([]position, len(m.weekDays)+1)
-		absoluteX = 0
-
-		// Task name column with ellipsis if too long
-		taskName := entry.TaskName
-		if m.searchMode && len(m.searchQuery) > 0 {
-			lowerTask := strings.ToLower(taskName)
-			lowerQuery := strings.ToLower(m.searchQuery)
-			if idx := strings.Index(lowerTask, lowerQuery); idx >= 0 {
-				before := taskName[:idx]
-				match := taskName[idx : idx+len(m.searchQuery)]
-				after := taskName[idx+len(m.searchQuery):]
-
-				// Renderizza con l'highlight
-				taskName = before + highlightStyle.Render(match) + after
-				// Applica l'ellipsis solo se necessario
-				fullLength := len(before) + len(match) + len(after)
-				if fullLength > taskColWidth-8 && taskColWidth > 8 {
-					hw := (taskColWidth - 8) / 2
-					taskName = before[:min(len(before), hw)] + ".." + highlightStyle.Render(match[:min(len(match), 9)]) + ".." + after[max(0, len(after)-hw):]
-				}
-
-			}
-		} else if len(taskName) > taskColWidth-4 {
-			taskName = taskName[:taskColWidth-4] + "..."
-		}
-
-		row = append(row, taskCellStyle.Render(taskName))
-
-		// Task name column position
-		m.cellPositions[rowIdx][0] = position{
-			x:      absoluteX,
-			y:      absoluteY,
-			width:  taskColWidth + borderWidth,
-			height: 3, // Aumentiamo l'altezza per includere i bordi
-		}
-		absoluteX += taskColWidth + borderWidth + padding
-
-		// Hour columns
-		for colIdx := range m.weekDays {
-			style := cellStyle
-			content := "-"
-			day := m.weekFrom.AddDate(0, 0, colIdx).Format("2006-01-02")
-
-			if hours, exists := entry.Hours[day]; exists {
-				content = fmt.Sprintf("%.1f", hours)
-			}
-
-			if rowIdx == m.cursor.row-m.wndwOffset && colIdx+1 == m.cursor.col {
-				if m.editing {
-					style = editingStyle
-					content = m.editBuffer
-					if m.firstEdit {
-						content = selectedTextStyle.Render(content)
-					} else {
-						// Highlight the character at cursor position using background color
-						if m.cursorPos < len(content) {
-							// Highlight current character
-							content = content[:m.cursorPos] + cursorStyle.Render(string(content[m.cursorPos])) + content[m.cursorPos+1:]
-						} else {
-							// Show a space at the end if cursor is at the end
-							content = content + cursorStyle.Render(" ")
-						}
-					}
-				} else {
-					style = selectedStyle
-				}
-			}
-
-			row = append(row, style.Render(content))
-
-			// Hour columns positions
-			m.cellPositions[rowIdx][colIdx+1] = position{
-				x:      absoluteX,
-				y:      absoluteY,
-				width:  dayColWidth + borderWidth,
-				height: 3, // Aumentiamo l'altezza per includere i bordi
-			}
-			absoluteX += dayColWidth + borderWidth + padding
-		}
-
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Center, row...))
-		absoluteY += 3 // Incrementiamo di 1 per la prossima riga
+		rowStrings, rowCellPositions := m.renderTaskEntryRow(entry, rowIdx, taskColWidth, dayColWidth, padding, borderWidth, currentAbsoluteY, taskCellStyle, cellStyle, editingStyle, selectedStyle, highlightStyle, selectedTextStyle, cursorStyle)
+		m.cellPositions[rowIdx] = rowCellPositions
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Center, rowStrings...))
+		currentAbsoluteY += 3
 	}
 
-	// Calculate daily totals
-	totals := make([]float64, len(m.weekDays))
-	for _, entry := range m.timesheet {
-		for i := range m.weekDays {
-			day := m.weekFrom.AddDate(0, 0, i).Format("2006-01-02")
-			totals[i] += entry.Hours[day]
-		}
-	}
+	totals := m.calculateDailyTotals()
+	totalRow := m.renderTotalsRow(totals, taskCellStyle, cellStyle)
 
-	// Create totals row
-	totalRow := []string{taskCellStyle.Foreground(lipgloss.Color("72")).Render("Total")}
-	for _, total := range totals {
-		totalCellStyle := cellStyle.Foreground(lipgloss.Color("208"))
-		if total == 8 {
-			totalCellStyle = totalCellStyle.Foreground(lipgloss.Color("72"))
-		} else if total > 8 {
-			totalCellStyle = totalCellStyle.Foreground(lipgloss.Color("134"))
-		}
-		totalRow = append(totalRow, totalCellStyle.Render(fmt.Sprintf("%.1f", total)))
-	}
-
-	// Join all parts
 	table := lipgloss.JoinVertical(
 		lipgloss.Left,
 		lipgloss.JoinHorizontal(lipgloss.Center, headerRow...),
@@ -728,39 +755,26 @@ func (m TimesheetModel) View() string {
 		lipgloss.JoinVertical(lipgloss.Left, rows...),
 	)
 
-	var help string
-	if m.searchMode {
-		help = lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			lipgloss.NewStyle().Width(m.width-72).Render("Search: "+m.searchQuery),
+	help := m.renderHelpText()
 
-			"[esc] Exit Search    [← ↑ → ↓] Navigate    [enter/click] Edit/Save",
-		)
-	} else {
-		help = "[← ↑ → ↓] Navigate    [enter/click] Edit/Save    [/] Search    [tab] Tasks View"
-	}
-
-	// Calcola lo spazio disponibile e aggiungi padding per centrare verticalmente
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		table,
 		"\n",
+		table,
 	)
 
-	// Aggiungi spazi vuoti per spingere l'help in fondo
 	contentHeight := strings.Count(content, "\n") + 1
-	paddingHeight := m.height - contentHeight - 2 // -2 per l'help e un margine
+	paddingHeight := m.height - contentHeight - 2
 	if paddingHeight > 0 {
-		padding := strings.Repeat("\n", paddingHeight)
+		verticalPadding := strings.Repeat("\n", paddingHeight)
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			padding,
+			verticalPadding,
 		)
 	}
 
-	// Aggiungi l'help in fondo
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		content,
