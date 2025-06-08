@@ -2,11 +2,10 @@ package views
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
-
-	"os"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,38 +19,7 @@ import (
 type TimeEntryR struct {
 	TaskId   string
 	TaskName string
-	Hours    map[string]float64 // map of day -> hours
-}
-
-type position struct {
-	x      int
-	y      int
-	width  int
-	height int
-}
-
-type TimesheetModel struct {
-	width      int
-	height     int
-	wndwSize   int
-	wndwOffset int
-	timesheet  []TimeEntryR
-	weekDays   []string
-	weekFrom   time.Time
-	cursor     struct {
-		row int
-		col int
-	}
-	editing       bool
-	editBuffer    string
-	firstEdit     bool
-	cursorPos     int          // Add cursor position in text
-	cellPositions [][]position // stores screen positions of each cell
-	searchMode    bool
-	searchQuery   string
-	searched      []TimeEntryR
-	loading       bool
-	spinner       spinner.Model
+	Hours    map[string]float64
 }
 
 type loadedTimesheetMsg struct {
@@ -59,59 +27,59 @@ type loadedTimesheetMsg struct {
 	err       error
 }
 
-var DAYS = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
-
-func SortTimesheetEntries(entries []TimeEntryR, week time.Time) []TimeEntryR {
-	newEntries := make([]TimeEntryR, len(entries))
-	copy(newEntries, entries)
-	sort.Slice(newEntries, func(i, j int) bool {
-		hoursI := 0.0
-		for k, h := range newEntries[i].Hours {
-			if week.AddDate(0, 0, 7).Format("2006-01-02") >= k && k >= week.Format("2006-01-02") {
-				hoursI += h
-			}
-		}
-		hoursJ := 0.0
-		for k, h := range newEntries[j].Hours {
-			if week.AddDate(0, 0, 7).Format("2006-01-02") >= k && k >= week.Format("2006-01-02") {
-				hoursJ += h
-			}
-		}
-		if hoursI > 0 && hoursJ == 0 {
-			return true
-		}
-		if hoursI == 0 && hoursJ > 0 {
-			return false
-		}
-		return newEntries[i].TaskName < newEntries[j].TaskName
-	},
-	)
-	return newEntries
+type position struct {
+	x, y, width, height int
 }
 
-func FilterTs(entries []TimeEntryR, query string) []TimeEntryR {
-	if len(query) > 0 {
-		searched := make([]TimeEntryR, 0)
-		for i := range entries {
-			if strings.Contains(strings.ToLower(entries[i].TaskName), strings.ToLower(query)) {
-				searched = append(searched, entries[i])
-			}
-		}
-		return searched
-	} else {
-		return entries
-	}
+type tsStyles struct {
+	headerStyle       lipgloss.Style
+	taskHeaderStyle   lipgloss.Style
+	cellStyle         lipgloss.Style
+	taskCellStyle     lipgloss.Style
+	selectedStyle     lipgloss.Style
+	editingStyle      lipgloss.Style
+	highlightStyle    lipgloss.Style
+	selectedTextStyle lipgloss.Style
+	cursorStyle       lipgloss.Style
+	totalStyle        lipgloss.Style
+	totalOkStyle      lipgloss.Style
+	totalOverStyle    lipgloss.Style
+	helpStyle         lipgloss.Style
+	loadingStyle      lipgloss.Style
 }
 
-func calculateWindowSize(height int) int {
-	availableHeight := height - 11
-	wndwSize := availableHeight / 3
-
-	if wndwSize < 1 {
-		return 1
-	}
-	return wndwSize
+type TimesheetModel struct {
+	width        int
+	height       int
+	wndwSize     int
+	wndwOffset   int
+	timesheet    []TimeEntryR
+	filtered     []TimeEntryR
+	weekFrom     time.Time
+	weekDays     [5]string
+	cursorRow    int
+	cursorCol    int
+	editing      bool
+	editBuffer   string
+	firstEdit    bool
+	cursorPos    int
+	searchMode   bool
+	searchQuery  string
+	loading      bool
+	spinner      spinner.Model
+	styles       tsStyles
+	taskColWidth int
+	dayColWidth  int
 }
+
+const (
+	colTask = iota
+	colMon
+	colTue
+	colWed
+	colThu
+	colFri
+)
 
 func fetchTimesheetEntries() tea.Msg {
 	config := clients.GetConfig()
@@ -120,19 +88,11 @@ func fetchTimesheetEntries() tea.Msg {
 
 	tasks, err := client.GetTimesheetTasks()
 	if err != nil {
-		fmt.Println("Error fetching tasks:", err)
-		return loadedTimesheetMsg{
-			timesheet: nil,
-			err:       err,
-		}
+		return loadedTimesheetMsg{err: err}
 	}
 	trackings, err := client.GetTimesheetsEntries(userId)
 	if err != nil {
-		fmt.Println("Error fetching timesheets:", err)
-		return loadedTimesheetMsg{
-			timesheet: nil,
-			err:       err,
-		}
+		return loadedTimesheetMsg{err: err}
 	}
 
 	datats := make([]TimeEntryR, len(tasks))
@@ -143,554 +103,423 @@ func fetchTimesheetEntries() tea.Msg {
 			Hours:    make(map[string]float64),
 		}
 		for _, tracking := range trackings {
-			taskId, ok := tracking.Task.(map[string]interface{})
-			if ok {
-				taskIdStr, ok := taskId["id"].(string)
-				if ok && taskIdStr == task.Id {
+			if t, ok := tracking.Task.(map[string]interface{}); ok {
+				if t["id"] == task.Id {
 					day := shared.ToDateString(tracking.Start)
-					// Convert duration to hours
-					hours := shared.ToHours(tracking.Duration)
-					datats[i].Hours[day] += hours // hours
+					datats[i].Hours[day] += shared.ToHours(tracking.Duration)
 				}
 			}
-
 		}
 	}
 
-	return loadedTimesheetMsg{
-		timesheet: datats,
-		err:       nil,
+	return loadedTimesheetMsg{timesheet: datats}
+}
+
+func sortTimesheetEntries(entries []TimeEntryR, weekStart time.Time) []TimeEntryR {
+	sorted := make([]TimeEntryR, len(entries))
+	copy(sorted, entries)
+	weekEndStr := weekStart.AddDate(0, 0, 7).Format("2006-01-02")
+	weekStartStr := weekStart.Format("2006-01-02")
+
+	sort.Slice(sorted, func(i, j int) bool {
+		var hoursI, hoursJ float64
+		for date, h := range sorted[i].Hours {
+			if date >= weekStartStr && date < weekEndStr {
+				hoursI += h
+			}
+		}
+		for date, h := range sorted[j].Hours {
+			if date >= weekStartStr && date < weekEndStr {
+				hoursJ += h
+			}
+		}
+		if hoursI > 0 && hoursJ == 0 {
+			return true
+		}
+		if hoursI == 0 && hoursJ > 0 {
+			return false
+		}
+		return sorted[i].TaskName < sorted[j].TaskName
+	})
+	return sorted
+}
+
+func filterTimesheet(entries []TimeEntryR, query string) []TimeEntryR {
+	if query == "" {
+		return entries
 	}
+	filtered := make([]TimeEntryR, 0)
+	lowerQuery := strings.ToLower(query)
+	for _, entry := range entries {
+		if strings.Contains(strings.ToLower(entry.TaskName), lowerQuery) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func NewTimesheetModel() TimesheetModel {
-	weekFrom := time.Now().AddDate(0, 0, -int(time.Now().Weekday())+1)
-	// Get initial terminal size
+	s := spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))))
+	now := time.Now()
+	weekFrom := now.AddDate(0, 0, -int(now.Weekday())+1)
+
+	m := TimesheetModel{
+		timesheet: []TimeEntryR{},
+		filtered:  []TimeEntryR{},
+		weekFrom:  weekFrom,
+		loading:   true,
+		spinner:   s,
+		cursorCol: int(now.Weekday()),
+	}
+
+	if m.cursorCol == 0 || m.cursorCol > 5 {
+		m.cursorCol = 1
+	}
+
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
-		width = 120 // fallback width
-		height = 24 // fallback height
+		width, height = 120, 24
 	}
+	m.setSize(width, height)
 
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-
-	model := TimesheetModel{
-		width:         width,
-		height:        height, // usa le dimensioni effettive del terminale
-		wndwSize:      calculateWindowSize(height),
-		wndwOffset:    0,
-		timesheet:     []TimeEntryR{},
-		weekFrom:      weekFrom,
-		weekDays:      []string{"Mon", "Tue", "Wed", "Thu", "Fri"},
-		cellPositions: make([][]position, 0),
-		firstEdit:     false,
-		loading:       true,
-		spinner:       s,
-		cursorPos:     0,
-	}
-	model.cursor.row = 0
-	model.cursor.col = int(time.Now().Weekday())
-	if model.cursor.col == 0 || model.cursor.col == 6 {
-		model.cursor.col = 1
-	}
-	return model
+	return m
 }
 
-// Init inizializza il modello
+func (m *TimesheetModel) setSize(width, height int) {
+	m.width = width
+	m.height = height
+
+	availableHeight := height - 11
+	m.wndwSize = availableHeight / 3
+	if m.wndwSize < 1 {
+		m.wndwSize = 1
+	}
+
+	numColumns := 6
+	padding := 2
+	availableWidth := m.width - (numColumns * padding)
+	m.taskColWidth = availableWidth * 4 / 9
+	m.dayColWidth = availableWidth / 9
+
+	m.styles.headerStyle = ui.SubtitleStyle.Width(m.dayColWidth).Align(lipgloss.Center).BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240"))
+	m.styles.taskHeaderStyle = m.styles.headerStyle.Width(m.taskColWidth).Foreground(lipgloss.Color("212"))
+	m.styles.cellStyle = lipgloss.NewStyle().Width(m.dayColWidth).Align(lipgloss.Center).BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240"))
+	m.styles.taskCellStyle = m.styles.cellStyle.Padding(0, 1).Width(m.taskColWidth).Align(lipgloss.Left)
+	m.styles.selectedStyle = m.styles.cellStyle.BorderForeground(lipgloss.Color("86")).Bold(true)
+	m.styles.editingStyle = m.styles.cellStyle.BorderForeground(lipgloss.Color("212")).Bold(true)
+	m.styles.highlightStyle = lipgloss.NewStyle().Background(lipgloss.Color("55"))
+	m.styles.selectedTextStyle = lipgloss.NewStyle().Background(lipgloss.Color("212")).Foreground(lipgloss.Color("0"))
+	m.styles.cursorStyle = lipgloss.NewStyle().Background(lipgloss.Color("212")).Foreground(lipgloss.Color("0"))
+	m.styles.totalStyle = m.styles.cellStyle.Foreground(lipgloss.Color("208"))
+	m.styles.totalOkStyle = m.styles.totalStyle.Foreground(lipgloss.Color("72"))
+	m.styles.totalOverStyle = m.styles.totalStyle.Foreground(lipgloss.Color("134"))
+	m.styles.helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Padding(0, 1)
+	m.styles.loadingStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#874BFD")).MarginLeft(2)
+}
+
+func (m *TimesheetModel) activeTimesheet() []TimeEntryR {
+	if m.searchMode {
+		return m.filtered
+	}
+	return m.timesheet
+}
+
+func (m *TimesheetModel) visibleTimesheet() []TimeEntryR {
+	active := m.activeTimesheet()
+	end := m.wndwOffset + m.wndwSize
+	if end > len(active) {
+		end = len(active)
+	}
+	if m.wndwOffset >= len(active) {
+		return []TimeEntryR{}
+	}
+	return active[m.wndwOffset:end]
+}
+
+func (m *TimesheetModel) reapplyFiltersAndSort() {
+	m.timesheet = sortTimesheetEntries(m.timesheet, m.weekFrom)
+	m.filtered = filterTimesheet(m.timesheet, m.searchQuery)
+	m.clampCursor()
+}
+
+func (m *TimesheetModel) clampCursor() {
+	activeLen := len(m.activeTimesheet())
+	if activeLen == 0 {
+		m.cursorRow = 0
+		m.wndwOffset = 0
+		return
+	}
+	if m.cursorRow < 0 {
+		m.cursorRow = 0
+	}
+	if m.cursorRow >= activeLen {
+		m.cursorRow = activeLen - 1
+	}
+	if m.cursorRow < m.wndwOffset {
+		m.wndwOffset = m.cursorRow
+	}
+	if m.cursorRow >= m.wndwOffset+m.wndwSize {
+		m.wndwOffset = m.cursorRow - m.wndwSize + 1
+	}
+}
+
+func (m *TimesheetModel) stopEditing() {
+	m.editing = false
+	m.editBuffer = ""
+	m.firstEdit = false
+	m.cursorPos = 0
+}
+
+func (m *TimesheetModel) startEditing() {
+	if len(m.activeTimesheet()) == 0 {
+		return
+	}
+	m.editing = true
+	m.firstEdit = true
+	dayKey := m.weekFrom.AddDate(0, 0, m.cursorCol-1).Format("2006-01-02")
+	hours := m.activeTimesheet()[m.cursorRow].Hours[dayKey]
+	m.editBuffer = fmt.Sprintf("%.2f", hours)
+	m.cursorPos = len(m.editBuffer)
+}
+
 func (m TimesheetModel) Init() tea.Cmd {
+	return tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+}
+
+func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.loading {
+		switch msg := msg.(type) {
+		case loadedTimesheetMsg:
+			m.loading = false
+			if msg.err == nil {
+				m.timesheet = msg.timesheet
+				m.reapplyFiltersAndSort()
+			}
+		case spinner.TickMsg:
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		case tea.KeyMsg:
+			if msg.String() == "q" {
+				return m, tea.Quit
+			}
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	switch msg := msg.(type) {
+	case LoadMsg:
+		m.loading = true
+		cmd = tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+	case tea.KeyMsg:
+		return m.handleKeyPress(msg)
+	case tea.MouseMsg:
+		m.handleMouseInput(msg)
+	case tea.WindowSizeMsg:
+		m.setSize(msg.Width, msg.Height)
+	case loadedTimesheetMsg:
+		if msg.err == nil {
+			m.reapplyFiltersAndSort()
+		}
+	}
+
+	m.clampCursor()
+	return m, cmd
+}
+
+func (m *TimesheetModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	if m.editing {
+		m.handleEditingInput(msg)
+	} else if m.searchMode {
+		m.handleSearchInput(msg)
+	} else {
+		cmd = m.handleNavigationInput(msg)
+	}
+	m.clampCursor()
+	return m, cmd
+}
+
+func (m *TimesheetModel) handleEditingInput(msg tea.KeyMsg) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		var newHours float64
+		_, err := fmt.Sscanf(m.editBuffer, "%f", &newHours)
+		if err == nil && newHours >= 0 {
+			entry := m.activeTimesheet()[m.cursorRow]
+			day := m.weekFrom.AddDate(0, 0, m.cursorCol-1)
+			config := clients.GetConfig()
+			client := clients.NewClickupClient(config.ClickupToken, config.TeamId)
+			if updateErr := client.UpdateTracking(config.UserId, entry.TaskId, day, newHours); updateErr != nil {
+				fmt.Fprintf(os.Stderr, "Error updating tracking for task %s: %v\n", entry.TaskId, updateErr)
+			} else {
+				dayKey := day.Format("2006-01-02")
+				for i := range m.timesheet {
+					if m.timesheet[i].TaskId == entry.TaskId {
+						m.timesheet[i].Hours[dayKey] = newHours
+						break
+					}
+				}
+				m.reapplyFiltersAndSort()
+			}
+		}
+		m.stopEditing()
+	case tea.KeyEscape:
+		m.stopEditing()
+	case tea.KeyBackspace:
+		if m.firstEdit {
+			m.editBuffer, m.cursorPos, m.firstEdit = "", 0, false
+		} else if m.cursorPos > 0 {
+			m.editBuffer = m.editBuffer[:m.cursorPos-1] + m.editBuffer[m.cursorPos:]
+			m.cursorPos--
+		}
+	case tea.KeyLeft:
+		if m.cursorPos > 0 {
+			m.cursorPos--
+		}
+	case tea.KeyRight:
+		if m.cursorPos < len(m.editBuffer) {
+			m.cursorPos++
+		}
+	case tea.KeyRunes:
+		if m.firstEdit {
+			m.editBuffer, m.cursorPos, m.firstEdit = "", 0, false
+		}
+		m.editBuffer = m.editBuffer[:m.cursorPos] + string(msg.Runes) + m.editBuffer[m.cursorPos:]
+		m.cursorPos += len(msg.Runes)
+	}
+}
+
+func (m *TimesheetModel) handleSearchInput(msg tea.KeyMsg) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.searchMode, m.searchQuery = false, ""
+		m.reapplyFiltersAndSort()
+	case tea.KeyBackspace:
+		if len(m.searchQuery) > 0 {
+			m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+			m.filtered = filterTimesheet(m.timesheet, m.searchQuery)
+			m.cursorRow = 0
+		}
+	case tea.KeyRunes:
+		m.searchQuery += string(msg.Runes)
+		m.filtered = filterTimesheet(m.timesheet, m.searchQuery)
+		m.cursorRow = 0
+	default:
+		m.handleNavigationInput(msg)
+	}
+}
+
+func (m *TimesheetModel) handleNavigationInput(msg tea.KeyMsg) tea.Cmd {
+	switch key := msg.String(); key {
+	case "q":
+		return tea.Quit
+	case "r":
+		clients.ClearTimesheetTasksCache()
+		clients.ClearTimeentriesCache()
+		m.loading = true
 		return tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+	case "enter":
+		if m.cursorCol > colTask && len(m.activeTimesheet()) > 0 {
+			m.startEditing()
+		}
+	case "up":
+		if m.cursorRow > 0 {
+			m.cursorRow--
+		}
+	case "down":
+		if m.cursorRow < len(m.activeTimesheet())-1 {
+			m.cursorRow++
+		}
+	case "left":
+		if m.cursorCol > colMon {
+			m.cursorCol--
+		} else {
+			m.weekFrom, m.cursorCol = m.weekFrom.AddDate(0, 0, -7), colFri
+			m.reapplyFiltersAndSort()
+		}
+	case "right":
+		if m.cursorCol < colFri {
+			m.cursorCol++
+		} else {
+			m.weekFrom, m.cursorCol = m.weekFrom.AddDate(0, 0, 7), colMon
+			m.reapplyFiltersAndSort()
+		}
+	case "ctrl+left":
+		m.weekFrom = m.weekFrom.AddDate(0, 0, -7)
+		m.reapplyFiltersAndSort()
+	case "ctrl+right":
+		m.weekFrom = m.weekFrom.AddDate(0, 0, 7)
+		m.reapplyFiltersAndSort()
+	case "/":
+		m.searchMode, m.searchQuery = true, ""
+		m.filtered, m.cursorRow = m.timesheet, 0
 	}
 	return nil
 }
 
-// Update aggiorna il modello in base ai messaggi ricevuti
-func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	if m.loading {
-		switch msg := msg.(type) {
-		case loadedTimesheetMsg:
-			if msg.err != nil {
-				return m, tea.Quit
-			}
-			m.loading = false
-			m.timesheet = SortTimesheetEntries(msg.timesheet, m.weekFrom)
-			m.searched = FilterTs(m.timesheet, m.searchQuery)
-			return m, nil
-		case spinner.TickMsg:
-			var spinnerCmd tea.Cmd
-			m.spinner, spinnerCmd = m.spinner.Update(msg)
-			return m, spinnerCmd
+func (m *TimesheetModel) calculateCellPositions() [][]position {
+	positions := make([][]position, m.wndwSize)
+	for i := range positions {
+		positions[i] = make([]position, 6)
+	}
+	startY := 9
+	rowHeight := 3
+	padding := 2
+	for r := 0; r < m.wndwSize; r++ {
+		currentX := 0
+		positions[r][colTask] = position{x: currentX, y: startY + r*rowHeight, width: m.taskColWidth + padding, height: rowHeight}
+		currentX += m.taskColWidth + padding
+		for c := colMon; c <= colFri; c++ {
+			positions[r][c] = position{x: currentX, y: startY + r*rowHeight, width: m.dayColWidth + padding, height: rowHeight}
+			currentX += m.dayColWidth + padding
 		}
 	}
-
-	switch msg := msg.(type) {
-	case LoadMsg:
-		return m, tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
-	case tea.KeyMsg:
-		if msg.String() == "q" && !m.editing && !m.searchMode {
-			return m, tea.Quit
-		}
-		if msg.String() == "r" && !m.editing && !m.searchMode {
-			clients.ClearTimesheetTasksCache()
-			clients.ClearTimeentriesCache()
-
-			m.loading = true
-			return m, tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
-		}
-		switch msg.String() {
-		case "esc":
-			if m.editing {
-				m.editing = false
-				m.editBuffer = ""
-				m.firstEdit = false
-				m.cursorPos = 0
-				return m, func() tea.Msg { return "stopPropagation" }
-			}
-			if m.searchMode {
-				m.searchMode = false
-				m.searchQuery = ""
-				return m, func() tea.Msg { return "stopPropagation" }
-			}
-			return m, nil
-		case "enter":
-			if m.editing {
-				// Try to parse and save the new value
-				var newHours float64
-				_, err := fmt.Sscanf(m.editBuffer, "%f", &newHours)
-				if err == nil && newHours >= 0 {
-					taskIdx := m.cursor.row
-					day := m.weekFrom.AddDate(0, 0, m.cursor.col-1)
-					dayKey := day.Format("2006-01-02")
-					config := clients.GetConfig()
-					client := clients.NewClickupClient(config.ClickupToken, config.TeamId)
-					var taskId string
-					if m.searchMode {
-						taskId = m.searched[taskIdx].TaskId
-					} else {
-						taskId = m.timesheet[taskIdx].TaskId
-					}
-					err := client.UpdateTracking(config.UserId, taskId, day, newHours)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error updating tracking for task %s on day %s: %v\n", taskId, dayKey, err)
-					} else {
-						updated := false
-						for i := range m.timesheet {
-							if m.timesheet[i].TaskId == taskId {
-								if m.timesheet[i].Hours == nil { // Ensure the map is initialized
-									m.timesheet[i].Hours = make(map[string]float64)
-								}
-								m.timesheet[i].Hours[dayKey] = newHours
-								updated = true
-								break
-							}
-						}
-						if updated {
-							m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
-							m.searched = FilterTs(m.timesheet, m.searchQuery)
-						} else {
-							fmt.Fprintf(os.Stderr, "Error: TaskId %s not found in local timesheet after successful API update for day %s\n", taskId, dayKey)
-						}
-					}
-				}
-				m.editing = false
-				m.editBuffer = ""
-				m.firstEdit = false
-				m.cursorPos = 0
-				return m, nil
-			} else if m.cursor.col > 0 { // Don't edit task name column
-				m.editing = true
-				m.firstEdit = true
-				dayKey := m.weekFrom.AddDate(0, 0, m.cursor.col-1).Format("2006-01-02")
-				if m.searchMode {
-					m.editBuffer = fmt.Sprintf("%.2f", m.searched[m.cursor.row].Hours[dayKey])
-				} else {
-					m.editBuffer = fmt.Sprintf("%.2f", m.timesheet[m.cursor.row].Hours[dayKey])
-				}
-				m.cursorPos = len(m.editBuffer)
-				return m, nil
-			}
-		case "left", "right":
-			m.firstEdit = false
-			if m.editing {
-				if msg.String() == "left" && m.cursorPos > 0 {
-					m.cursorPos--
-					return m, nil
-				} else if msg.String() == "right" && m.cursorPos < len(m.editBuffer) {
-					m.cursorPos++
-					return m, nil
-				}
-			}
-			if !m.editing {
-				if msg.String() == "left" {
-					if m.cursor.col > 1 {
-						m.cursor.col--
-					} else {
-						m.cursor.col = 5
-						m.weekFrom = m.weekFrom.AddDate(0, 0, -7)
-						m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
-					}
-				} else if msg.String() == "right" {
-					if m.cursor.col < len(m.weekDays) {
-						m.cursor.col++
-					} else {
-						m.cursor.col = 1
-						m.weekFrom = m.weekFrom.AddDate(0, 0, 7)
-						m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
-					}
-				}
-			}
-		case "up", "down":
-			if !m.editing {
-				if msg.String() == "up" && m.cursor.row > 0 {
-					m.cursor.row--
-					if m.cursor.row < m.wndwOffset {
-						m.wndwOffset--
-					}
-				} else if msg.String() == "down" {
-					if (!m.searchMode && m.cursor.row < len(m.timesheet)-1) || (m.searchMode && m.cursor.row < len(m.searched)-1) {
-						m.cursor.row++
-						if m.cursor.row >= m.wndwOffset+m.wndwSize {
-							m.wndwOffset++
-						}
-					}
-				}
-			}
-		case "backspace":
-			if m.editing {
-				if m.firstEdit {
-					m.editBuffer = ""
-					m.firstEdit = false
-					m.cursorPos = 0
-				} else if m.cursorPos > 0 {
-					// Remove character before cursor
-					m.editBuffer = m.editBuffer[:m.cursorPos-1] + m.editBuffer[m.cursorPos:]
-					m.cursorPos--
-				}
-			}
-			if m.searchMode && len(m.searchQuery) > 0 {
-				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
-				m.cursor.row = 0
-				m.wndwOffset = 0
-				m.searched = FilterTs(m.timesheet, m.searchQuery)
-			}
-		case "ctrl+left":
-			if !m.editing {
-				m.weekFrom = m.weekFrom.AddDate(0, 0, -7)
-				m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
-			}
-		case "ctrl+right":
-			if !m.editing {
-				m.weekFrom = m.weekFrom.AddDate(0, 0, 7)
-				m.timesheet = SortTimesheetEntries(m.timesheet, m.weekFrom)
-			}
-		case "/":
-			if !m.editing {
-				m.searchMode = !m.searchMode
-				m.searchQuery = ""
-				m.searched = m.timesheet
-			}
-		default:
-			if !m.editing && m.searchMode {
-				m.searchQuery += msg.String()
-				m.cursor.row = 0
-				m.wndwOffset = 0
-				m.searched = FilterTs(m.timesheet, m.searchQuery)
-			}
-			if m.editing && len(msg.String()) == 1 {
-				if m.firstEdit {
-					m.editBuffer = msg.String()
-					m.cursorPos = 1
-					m.firstEdit = false
-				} else {
-					// Insert character at cursor position
-					if m.cursorPos == len(m.editBuffer) {
-						m.editBuffer += msg.String()
-					} else {
-						m.editBuffer = m.editBuffer[:m.cursorPos] + msg.String() + m.editBuffer[m.cursorPos:]
-					}
-					m.cursorPos++
-				}
-			}
-		}
-	case tea.MouseMsg:
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			// Recalculate cell positions
-			m.cellPositions = make([][]position, m.wndwSize)
-			for rowIdx := 0; rowIdx < m.wndwSize; rowIdx++ {
-				m.cellPositions[rowIdx] = make([]position, len(m.weekDays)+1)
-			}
-			// Calculate cell positions
-
-			// Calculate responsive column widths
-			numColumns := len(m.weekDays) + 1 // +1 for task name column
-			padding := 2                      // space between columns
-			borderWidth := 0                  // left and right border of each cell
-			totalBordersWidth := numColumns * borderWidth
-			totalPaddingWidth := numColumns * padding
-			availableWidth := m.width - totalBordersWidth - totalPaddingWidth
-			// Task name column gets more space
-			taskColWidth := availableWidth * 4 / 9
-			// Remaining width divided equally among day columns
-			dayColWidth := availableWidth / 9
-			// Calculate cell positions
-			currentAbsoluteY := 9 // Start after title (1) + header (3) + totals row (3)
-			for rowIdx := 0; rowIdx < m.wndwSize; rowIdx++ {
-				m.cellPositions[rowIdx] = m.calculateRowCellPositions(taskColWidth, dayColWidth, padding, borderWidth, currentAbsoluteY)
-				currentAbsoluteY += 3 // Increment for the next row
-			}
-
-			// Find which cell was clicked
-			for row := 0; row < m.wndwSize; row++ {
-				for col := 1; col <= len(m.weekDays); col++ {
-					cell := m.cellPositions[row][col]
-					if msg.X >= cell.x && msg.X < cell.x+cell.width &&
-						msg.Y >= cell.y && msg.Y < cell.y+cell.height {
-						if m.cursor.row == row && m.cursor.col == col {
-							// Toggle editing mode
-							m.editing = !m.editing
-							if m.editing {
-								m.firstEdit = true
-								dayKey := m.weekFrom.AddDate(0, 0, m.cursor.col-1).Format("2006-01-02")
-								if m.searchMode {
-									m.editBuffer = fmt.Sprintf("%.2f", m.searched[m.cursor.row+m.wndwOffset].Hours[dayKey])
-								} else {
-									m.editBuffer = fmt.Sprintf("%.2f", m.timesheet[m.cursor.row+m.wndwOffset].Hours[dayKey])
-								}
-								m.cursorPos = len(m.editBuffer)
-							} else {
-								m.editBuffer = ""
-								m.firstEdit = false
-								m.cursorPos = 0
-							}
-						} else {
-							m.cursor.row = row + m.wndwOffset
-							m.cursor.col = col
-							m.editing = false
-						}
-						return m, nil
-					}
-				}
-			}
-			m.editing = false
-			m.editBuffer = ""
-		} else if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp {
-			if !m.editing && m.cursor.row > 0 {
-				m.cursor.row--
-				if m.cursor.row < m.wndwOffset {
-					m.wndwOffset--
-				}
-			}
-		} else if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelDown {
-			if !m.editing && m.cursor.row < len(m.timesheet)-1 {
-				m.cursor.row++
-				if m.cursor.row >= m.wndwOffset+m.wndwSize {
-					m.wndwOffset++
-				}
-			}
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.wndwSize = calculateWindowSize(msg.Height)
-		// Ensure wndwOffset is still valid with new window size
-		if m.cursor.row >= m.wndwOffset+m.wndwSize {
-			m.wndwOffset = m.cursor.row - m.wndwSize + 1
-		}
-	}
-	return m, cmd
+	return positions
 }
 
-func (m TimesheetModel) calculateColumnWidths() (int, int) {
-	numColumns := len(m.weekDays) + 1 // +1 for task name column
-	padding := 2                      // space between columns
-	borderWidth := 0                  // left and right border of each cell
-	totalBordersWidth := numColumns * borderWidth
-	totalPaddingWidth := numColumns * padding
-	availableWidth := m.width - totalBordersWidth - totalPaddingWidth
-	taskColWidth := availableWidth * 4 / 9
-	dayColWidth := availableWidth / 9.0
-	return taskColWidth, dayColWidth
-}
-
-func (m TimesheetModel) initializeStyles(taskColWidth, dayColWidth int) (
-	lipgloss.Style, lipgloss.Style, lipgloss.Style, lipgloss.Style,
-	lipgloss.Style, lipgloss.Style, lipgloss.Style, lipgloss.Style, lipgloss.Style) {
-	headerStyle := ui.SubtitleStyle.Width(dayColWidth).Align(lipgloss.Center).BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240"))
-	taskHeaderStyle := headerStyle.Width(taskColWidth).Foreground(lipgloss.Color("212"))
-
-	cellStyle := lipgloss.NewStyle().
-		Width(dayColWidth).
-		Align(lipgloss.Center).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240"))
-
-	taskCellStyle := cellStyle.
-		Padding(0, 1).
-		Width(taskColWidth).
-		Align(lipgloss.Left)
-
-	selectedStyle := cellStyle.
-		BorderForeground(lipgloss.Color("86")).
-		Bold(true)
-
-	editingStyle := cellStyle.
-		BorderForeground(lipgloss.Color("212")).
-		Bold(true)
-
-	highlightStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("55"))
-
-	selectedTextStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("212")).
-		Foreground(lipgloss.Color("0"))
-
-	cursorStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("212")).
-		Foreground(lipgloss.Color("0"))
-
-	return headerStyle, taskHeaderStyle, cellStyle, taskCellStyle,
-		selectedStyle, editingStyle, highlightStyle, selectedTextStyle, cursorStyle
-}
-
-func (m TimesheetModel) renderHeaderRow(taskHeaderStyle, headerStyle lipgloss.Style) []string {
-	headerRow := []string{taskHeaderStyle.Render(m.weekFrom.Format("January 2006"))}
-	for _, h := range m.weekDays {
-		headerRow = append(headerRow, headerStyle.Render(h))
-	}
-	return headerRow
-}
-
-func (m TimesheetModel) renderHourCell(entry TimeEntryR, day string, rowIdx, colIdx int, cellStyle, editingStyle, selectedStyle, selectedTextStyle, cursorStyle lipgloss.Style) (string, lipgloss.Style) {
-	style := cellStyle
-	content := "-"
-
-	if hours, exists := entry.Hours[day]; exists {
-		content = fmt.Sprintf("%.1f", hours)
-	}
-
-	if rowIdx == m.cursor.row-m.wndwOffset && colIdx+1 == m.cursor.col {
+func (m *TimesheetModel) handleMouseInput(msg tea.MouseMsg) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if m.cursorRow > 0 {
+			m.cursorRow--
+		}
+	case tea.MouseButtonWheelDown:
+		if m.cursorRow < len(m.activeTimesheet())-1 {
+			m.cursorRow++
+		}
+	case tea.MouseButtonLeft:
+		if msg.Action != tea.MouseActionRelease {
+			return
+		}
 		if m.editing {
-			style = editingStyle
-			content = m.editBuffer
-			if m.firstEdit {
-				content = selectedTextStyle.Render(content)
-			} else {
-				if m.cursorPos < len(content) {
-					content = content[:m.cursorPos] + cursorStyle.Render(string(content[m.cursorPos])) + content[m.cursorPos+1:]
-				} else {
-					content = content + cursorStyle.Render(" ")
+			m.stopEditing()
+			return
+		}
+		positions := m.calculateCellPositions()
+		for r, rowPos := range positions {
+			for c, cellPos := range rowPos {
+				if c > 0 && msg.X >= cellPos.x && msg.X < cellPos.x+cellPos.width && msg.Y >= cellPos.y && msg.Y < cellPos.y+cellPos.height {
+					clickedDataRow := r + m.wndwOffset
+					if clickedDataRow >= len(m.activeTimesheet()) {
+						return
+					}
+					isCurrentlySelectedCell := clickedDataRow == m.cursorRow && c == m.cursorCol
+					if isCurrentlySelectedCell {
+						if c != colTask {
+							m.startEditing()
+						}
+					} else {
+						m.cursorRow, m.cursorCol = clickedDataRow, c
+						m.stopEditing()
+					}
+					return
 				}
 			}
-		} else {
-			style = selectedStyle
 		}
+		m.stopEditing()
 	}
-	return content, style
-}
-
-func (m TimesheetModel) calculateRowCellPositions(taskColWidth, dayColWidth, padding, borderWidth, absoluteY int) []position {
-	rowCellPositions := make([]position, len(m.weekDays)+1)
-	absoluteX := 0
-
-	// Task column position
-	rowCellPositions[0] = position{
-		x:      absoluteX,
-		y:      absoluteY,
-		width:  taskColWidth + borderWidth,
-		height: 3, // Assuming height is constant for now
-	}
-	absoluteX += taskColWidth + borderWidth + padding
-
-	// Day columns positions
-	for colIdx := range m.weekDays {
-		rowCellPositions[colIdx+1] = position{
-			x:      absoluteX,
-			y:      absoluteY,
-			width:  dayColWidth + borderWidth,
-			height: 3, // Assuming height is constant
-		}
-		absoluteX += dayColWidth + borderWidth + padding
-	}
-	return rowCellPositions
-}
-
-func (m TimesheetModel) renderTaskEntryRow(entry TimeEntryR, rowIdx, taskColWidth, dayColWidth, padding, borderWidth, absoluteY int, taskCellStyle, cellStyle, editingStyle, selectedStyle, highlightStyle, selectedTextStyle, cursorStyle lipgloss.Style) ([]string, []position) {
-	row := []string{}
-
-	taskName := entry.TaskName
-	if m.searchMode && len(m.searchQuery) > 0 {
-		lowerTask := strings.ToLower(taskName)
-		lowerQuery := strings.ToLower(m.searchQuery)
-		if idx := strings.Index(lowerTask, lowerQuery); idx >= 0 {
-			before := taskName[:idx]
-			match := taskName[idx : idx+len(m.searchQuery)]
-			after := taskName[idx+len(m.searchQuery):]
-
-			taskName = before + highlightStyle.Render(match) + after
-			fullLength := len(before) + len(match) + len(after)
-			if fullLength > taskColWidth-8 && taskColWidth > 8 {
-				hw := (taskColWidth - 8) / 2
-				taskName = before[:min(len(before), hw)] + ".." + highlightStyle.Render(match[:min(len(match), 9)]) + ".." + after[max(0, len(after)-hw):]
-			}
-		}
-	} else if len(taskName) > taskColWidth-6 {
-		taskName = taskName[:taskColWidth-6] + "..."
-	}
-
-	row = append(row, taskCellStyle.Render(taskName))
-
-	for colIdx := range m.weekDays {
-		day := m.weekFrom.AddDate(0, 0, colIdx).Format("2006-01-02")
-		content, style := m.renderHourCell(entry, day, rowIdx, colIdx, cellStyle, editingStyle, selectedStyle, selectedTextStyle, cursorStyle)
-		row = append(row, style.Render(content))
-	}
-
-	rowCellPositions := m.calculateRowCellPositions(taskColWidth, dayColWidth, padding, borderWidth, absoluteY)
-	return row, rowCellPositions
-}
-
-func (m TimesheetModel) calculateDailyTotals() []float64 {
-	totals := make([]float64, len(m.weekDays))
-	for _, entry := range m.timesheet {
-		for i := range m.weekDays {
-			day := m.weekFrom.AddDate(0, 0, i).Format("2006-01-02")
-			totals[i] += entry.Hours[day]
-		}
-	}
-	return totals
-}
-
-func (m TimesheetModel) renderTotalsRow(totals []float64, taskCellStyle, cellStyle lipgloss.Style) []string {
-	totalRow := []string{taskCellStyle.Foreground(lipgloss.Color("72")).Render("Total")}
-	for _, total := range totals {
-		totalCellStyle := cellStyle.Foreground(lipgloss.Color("208"))
-		if total == 8 {
-			totalCellStyle = totalCellStyle.Foreground(lipgloss.Color("72"))
-		} else if total > 8 {
-			totalCellStyle = totalCellStyle.Foreground(lipgloss.Color("134"))
-		}
-		totalRow = append(totalRow, totalCellStyle.Render(fmt.Sprintf("%.1f", total)))
-	}
-	return totalRow
-}
-
-func (m TimesheetModel) renderHelpText() string {
-	var help string
-	if m.searchMode {
-		help = lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			lipgloss.NewStyle().Width(m.width-72).Render("Search: "+m.searchQuery),
-			"[esc] Exit Search    [← ↑ → ↓] Navigate    [enter/click] Edit/Save",
-		)
-	} else {
-		help = "[← ↑ → ↓] Navigate    [enter/click] Edit/Save    [/] Search    [tab] Tasks View"
-	}
-	return help
 }
 
 func (m TimesheetModel) View() string {
@@ -698,86 +527,161 @@ func (m TimesheetModel) View() string {
 		return "Initializing..."
 	}
 	if m.loading {
-		loadingStyle := lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#874BFD")).
-			MarginLeft(2)
-
-		content := loadingStyle.Render("Caricamento timesheet... ") + m.spinner.View()
-
-		return content
+		return m.styles.loadingStyle.Render("Loading timesheet... ") + m.spinner.View()
 	}
 
-	helpStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
-		Padding(0, 1)
-
-	title := ui.TitleStyle.Render("Weekly Timesheet")
-	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
-	for i := 1; i < 6; i++ {
-		m.weekDays[i-1] = m.weekFrom.AddDate(0, 0, i-1).Format("Mon 2")
+	for i := 0; i < 5; i++ {
+		m.weekDays[i] = m.weekFrom.AddDate(0, 0, i).Format("Mon 2")
 	}
 
-	taskColWidth, dayColWidth := m.calculateColumnWidths()
-	padding := 2     // space between columns
-	borderWidth := 0 // left and right border of each cell
-	absoluteY := 9   // Start after title (1) + header (3) + totals row (3)
+	title := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, ui.TitleStyle.Render("Weekly Timesheet"))
+	table := m.renderTable()
+	help := m.renderHelp()
 
-	headerStyle, taskHeaderStyle, cellStyle, taskCellStyle,
-		selectedStyle, editingStyle, highlightStyle, selectedTextStyle, cursorStyle := m.initializeStyles(taskColWidth, dayColWidth)
+	content := lipgloss.JoinVertical(lipgloss.Left, title, "\n", table)
+	if paddingHeight := m.height - lipgloss.Height(content) - lipgloss.Height(help); paddingHeight > 0 {
+		content = lipgloss.JoinVertical(lipgloss.Left, content, strings.Repeat("\n", paddingHeight-1))
+	}
 
-	headerRow := m.renderHeaderRow(taskHeaderStyle, headerStyle)
+	return lipgloss.JoinVertical(lipgloss.Left, content, m.styles.helpStyle.Render(help))
+}
 
-	m.cellPositions = make([][]position, m.wndwSize)
+func (m *TimesheetModel) renderTable() string {
+	return lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), m.renderTotalsRow(), m.renderBody())
+}
+
+func (m *TimesheetModel) renderHeader() string {
+	headers := []string{m.styles.taskHeaderStyle.Render(m.weekFrom.Format("January 2006"))}
+	for _, day := range m.weekDays {
+		headers = append(headers, m.styles.headerStyle.Render(day))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Left, headers...)
+}
+
+func (m *TimesheetModel) renderTotalsRow() string {
+	totals := make([]float64, 5)
+	for _, entry := range m.timesheet {
+		for i := 0; i < 5; i++ {
+			day := m.weekFrom.AddDate(0, 0, i).Format("2006-01-02")
+			totals[i] += entry.Hours[day]
+		}
+	}
+	totalCells := []string{m.styles.taskCellStyle.Foreground(lipgloss.Color("72")).Render("Total")}
+	for _, total := range totals {
+		style := m.styles.totalStyle
+		if total == 8 {
+			style = m.styles.totalOkStyle
+		} else if total > 8 {
+			style = m.styles.totalOverStyle
+		}
+		totalCells = append(totalCells, style.Render(fmt.Sprintf("%.1f", total)))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Left, totalCells...)
+}
+
+func (m *TimesheetModel) renderBody() string {
 	var rows []string
-	var wndw []TimeEntryR
-	if m.searchMode {
-		wndw = m.searched[m.wndwOffset:min(m.wndwOffset+m.wndwSize, len(m.searched))]
+	for i, entry := range m.visibleTimesheet() {
+		rows = append(rows, m.renderRow(entry, m.wndwOffset+i))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+func (m *TimesheetModel) renderRow(entry TimeEntryR, rowIdx int) string {
+	isCursorRow := (rowIdx == m.cursorRow)
+	taskCell := m.renderTaskCell(entry.TaskName, isCursorRow)
+	dayCells := make([]string, 5)
+	for i := 0; i < 5; i++ {
+		day := m.weekFrom.AddDate(0, 0, i).Format("2006-01-02")
+		dayCells[i] = m.renderDayCell(entry.Hours[day], isCursorRow, i+1)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Left, append([]string{taskCell}, dayCells...)...)
+}
+
+func (m *TimesheetModel) renderTaskCell(taskNameInput string, isCursorRow bool) string {
+	var currentStyle lipgloss.Style
+	if isCursorRow && m.cursorCol == colTask {
+		currentStyle = m.styles.selectedStyle.Width(m.taskColWidth).Align(lipgloss.Left)
 	} else {
-		wndw = m.timesheet[m.wndwOffset:min(m.wndwOffset+m.wndwSize, len(m.timesheet))]
+		currentStyle = m.styles.taskCellStyle
 	}
 
-	currentAbsoluteY := absoluteY
-	for rowIdx, entry := range wndw {
-		rowStrings, rowCellPositions := m.renderTaskEntryRow(entry, rowIdx, taskColWidth, dayColWidth, padding, borderWidth, currentAbsoluteY, taskCellStyle, cellStyle, editingStyle, selectedStyle, highlightStyle, selectedTextStyle, cursorStyle)
-		m.cellPositions[rowIdx] = rowCellPositions
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Center, rowStrings...))
-		currentAbsoluteY += 3
+	finalTextContent := taskNameInput
+
+	if m.searchMode && len(m.searchQuery) > 0 {
+		lowerTask := strings.ToLower(taskNameInput)
+		lowerQuery := strings.ToLower(m.searchQuery)
+
+		if idx := strings.Index(lowerTask, lowerQuery); idx >= 0 {
+			before := taskNameInput[:idx]
+			matchText := taskNameInput[idx : idx+len(m.searchQuery)]
+			after := taskNameInput[idx+len(m.searchQuery):]
+
+			contentBudgetForSpecialLayout := m.taskColWidth - 8
+
+			if len(taskNameInput) > contentBudgetForSpecialLayout && contentBudgetForSpecialLayout > 0 {
+				halfBudget := contentBudgetForSpecialLayout / 2
+
+				bPart := before
+				if len(before) > halfBudget {
+					bPart = before[:halfBudget]
+				}
+
+				mPartText := matchText
+				maxMatchHighlightLen := 9
+				if len(matchText) > maxMatchHighlightLen {
+					mPartText = matchText[:maxMatchHighlightLen]
+				}
+				highlightedMatchPart := m.styles.highlightStyle.Render(mPartText)
+
+				aPart := after
+				startAfterIndex := len(after) - halfBudget
+				if startAfterIndex < 0 {
+					startAfterIndex = 0
+				}
+				aPart = after[startAfterIndex:]
+
+				finalTextContent = bPart + ".." + highlightedMatchPart + ".." + aPart
+			} else {
+				finalTextContent = before + m.styles.highlightStyle.Render(matchText) + after
+			}
+		}
+	} else if maxLen := m.taskColWidth - 6; lipgloss.Width(taskNameInput) > maxLen && maxLen > 0 {
+		finalTextContent = taskNameInput[:maxLen] + "..."
 	}
 
-	totals := m.calculateDailyTotals()
-	totalRow := m.renderTotalsRow(totals, taskCellStyle, cellStyle)
+	return currentStyle.Render(finalTextContent)
+}
 
-	table := lipgloss.JoinVertical(
-		lipgloss.Left,
-		lipgloss.JoinHorizontal(lipgloss.Center, headerRow...),
-		lipgloss.JoinHorizontal(lipgloss.Center, totalRow...),
-		lipgloss.JoinVertical(lipgloss.Left, rows...),
-	)
+func (m *TimesheetModel) renderDayCell(hours float64, isCursorRow bool, colIdx int) string {
+	style, content := m.styles.cellStyle, "-"
+	if hours > 0 {
+		content = fmt.Sprintf("%.1f", hours)
+	}
+	if isCursorRow && colIdx == m.cursorCol {
+		if m.editing {
+			style, content = m.styles.editingStyle, m.editBuffer
+			if m.firstEdit {
+				content = m.styles.selectedTextStyle.Render(content)
+			} else if m.cursorPos < len(content) {
+				content = content[:m.cursorPos] + m.styles.cursorStyle.Render(string(content[m.cursorPos])) + content[m.cursorPos+1:]
+			} else {
+				content += m.styles.cursorStyle.Render(" ")
+			}
+		} else {
+			style = m.styles.selectedStyle
+		}
+	}
+	return style.Render(content)
+}
 
-	help := m.renderHelpText()
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		title,
-		"\n",
-		table,
-	)
-
-	contentHeight := strings.Count(content, "\n") + 1
-	paddingHeight := m.height - contentHeight - 2
-	if paddingHeight > 0 {
-		verticalPadding := strings.Repeat("\n", paddingHeight)
-		content = lipgloss.JoinVertical(
-			lipgloss.Left,
-			content,
-			verticalPadding,
+func (m *TimesheetModel) renderHelp() string {
+	if m.searchMode {
+		searchBar := "Search: " + m.searchQuery
+		return lipgloss.JoinHorizontal(lipgloss.Left,
+			lipgloss.NewStyle().Width(m.width-38).Render(searchBar),
+			"[esc] Exit Search    [↑↓] Navigate",
 		)
 	}
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		content,
-		helpStyle.Render(help),
-	)
+	return "[←↑→↓] Navigate   [enter] Select/Edit   [/] Search   [tab] View   [r] Refresh   [q] Quit"
 }
