@@ -366,7 +366,7 @@ func (m HomeModel) viewModal() string {
 			tagBg = "#555555"
 		}
 		tagFg := tag.TagFg
-		if tagFg == "" {
+		if tagFg == "" || tagFg == tagBg {
 			tagFg = "#000000"
 		}
 		metaInfo = append(metaInfo, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(tagBg)).Foreground(lipgloss.Color(tagFg)).Padding(0, 1).MarginRight(1).Render(tag.Name))
