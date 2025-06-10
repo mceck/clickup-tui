@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -341,11 +342,60 @@ func (m *TimesheetModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func parseHoursInput(input string) (float64, error) {
+	var hours, minutes float64
+	input = strings.ToLower(strings.TrimSpace(input))
+
+	if strings.Contains(input, "h") || strings.Contains(input, "m") {
+		parts := strings.Fields(input)
+		if len(parts) == 0 {
+			parts = []string{input}
+		}
+
+		for _, part := range parts {
+			if strings.Contains(part, "h") && strings.Contains(part, "m") {
+				hPart := strings.Split(part, "h")[0]
+				mPart := strings.Split(strings.Split(part, "h")[1], "m")[0]
+
+				h, err := strconv.ParseFloat(hPart, 64)
+				if err != nil {
+					return 0, err
+				}
+				hours = h
+
+				m, err := strconv.ParseFloat(mPart, 64)
+				if err != nil {
+					return 0, err
+				}
+				minutes = m
+				continue
+			}
+
+			if strings.HasSuffix(part, "h") {
+				h, err := strconv.ParseFloat(strings.TrimSuffix(part, "h"), 64)
+				if err != nil {
+					return 0, err
+				}
+				hours = h
+			}
+			if strings.HasSuffix(part, "m") {
+				m, err := strconv.ParseFloat(strings.TrimSuffix(part, "m"), 64)
+				if err != nil {
+					return 0, err
+				}
+				minutes = m
+			}
+		}
+		return hours + minutes/60.0, nil
+	}
+
+	return strconv.ParseFloat(input, 64)
+}
+
 func (m *TimesheetModel) handleEditingInput(msg tea.KeyMsg) {
 	switch msg.Type {
 	case tea.KeyEnter:
-		var newHours float64
-		_, err := fmt.Sscanf(m.editBuffer, "%f", &newHours)
+		newHours, err := parseHoursInput(m.editBuffer)
 		if err == nil && newHours >= 0 {
 			entry := m.activeTimesheet()[m.cursorRow]
 			day := m.weekFrom.AddDate(0, 0, m.cursorCol-1)
@@ -558,6 +608,21 @@ func (m *TimesheetModel) renderHeader() string {
 	return lipgloss.JoinHorizontal(lipgloss.Left, headers...)
 }
 
+func formatHoursToHM(hours float64) string {
+	if hours == 0 {
+		return "-"
+	}
+	h := int(hours)
+	m := int((hours - float64(h)) * 60)
+	if h == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	if m == 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh %dm", h, m)
+}
+
 func (m *TimesheetModel) renderTotalsRow() string {
 	totals := make([]float64, 5)
 	for _, entry := range m.timesheet {
@@ -574,7 +639,7 @@ func (m *TimesheetModel) renderTotalsRow() string {
 		} else if total > 8 {
 			style = m.styles.totalOverStyle
 		}
-		totalCells = append(totalCells, style.Render(fmt.Sprintf("%.1f", total)))
+		totalCells = append(totalCells, style.Render(formatHoursToHM(total)))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Left, totalCells...)
 }
@@ -656,7 +721,7 @@ func (m *TimesheetModel) renderTaskCell(taskNameInput string, isCursorRow bool) 
 func (m *TimesheetModel) renderDayCell(hours float64, isCursorRow bool, colIdx int) string {
 	style, content := m.styles.cellStyle, "-"
 	if hours > 0 {
-		content = fmt.Sprintf("%.1f", hours)
+		content = formatHoursToHM(hours)
 	}
 	if isCursorRow && colIdx == m.cursorCol {
 		if m.editing {
