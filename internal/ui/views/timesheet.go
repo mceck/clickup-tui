@@ -37,6 +37,7 @@ type tsStyles struct {
 	taskHeaderStyle   lipgloss.Style
 	cellStyle         lipgloss.Style
 	taskCellStyle     lipgloss.Style
+	selectedRowStyle  lipgloss.Style
 	selectedStyle     lipgloss.Style
 	editingStyle      lipgloss.Style
 	highlightStyle    lipgloss.Style
@@ -206,6 +207,7 @@ func (m *TimesheetModel) setSize(width, height int) {
 	m.styles.taskHeaderStyle = m.styles.headerStyle.Width(m.taskColWidth).Foreground(lipgloss.Color("212"))
 	m.styles.cellStyle = lipgloss.NewStyle().Width(m.dayColWidth).Align(lipgloss.Center).BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240"))
 	m.styles.taskCellStyle = m.styles.cellStyle.Padding(0, 1).Width(m.taskColWidth).Align(lipgloss.Left)
+	m.styles.selectedRowStyle = m.styles.taskCellStyle.BorderForeground(lipgloss.Color("250"))
 	m.styles.selectedStyle = m.styles.cellStyle.BorderForeground(lipgloss.Color("86")).Bold(true)
 	m.styles.editingStyle = m.styles.cellStyle.BorderForeground(lipgloss.Color("212")).Bold(true)
 	m.styles.highlightStyle = lipgloss.NewStyle().Background(lipgloss.Color("55"))
@@ -665,8 +667,8 @@ func (m *TimesheetModel) renderRow(entry TimeEntryR, rowIdx int) string {
 
 func (m *TimesheetModel) renderTaskCell(taskNameInput string, isCursorRow bool) string {
 	var currentStyle lipgloss.Style
-	if isCursorRow && m.cursorCol == colTask {
-		currentStyle = m.styles.selectedStyle.Width(m.taskColWidth).Align(lipgloss.Left)
+	if isCursorRow {
+		currentStyle = m.styles.selectedRowStyle
 	} else {
 		currentStyle = m.styles.taskCellStyle
 	}
