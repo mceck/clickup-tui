@@ -38,15 +38,22 @@ func (m AppModel) getCurrentRoute() tea.Model {
 }
 
 func New() AppModel {
+	config := clients.GetConfig()
+	var initialPage Page
+	if config.InitialView == "timesheet" {
+		initialPage = TimesheetView
+	} else {
+		initialPage = HomeView
+	}
 	return AppModel{
-		currentPage: TimesheetView,
+		currentPage: initialPage,
 		routes:      map[Page]tea.Model{},
 	}
 }
 
 func (m AppModel) Init() tea.Cmd {
 	config := clients.GetConfig()
-	if config.ClickupToken == "" {
+	if config.ClickupToken == "" || config.TeamId == "" {
 		m.currentPage = SettingsView
 	}
 	return m.getCurrentRoute().Init()
@@ -75,7 +82,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "?":
 			m.currentPage = SettingsView
-			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(msg)
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

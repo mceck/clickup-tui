@@ -66,3 +66,8 @@ type Comment struct {
 	Date          string        `json:"date"`
 	ReplyCount    int           `json:"reply_count"`
 }
+
+type Team struct {
+	Id   string `json:"id"`
+	Name string `json:"name"`
+}

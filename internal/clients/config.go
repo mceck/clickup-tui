@@ -6,10 +6,12 @@ import (
 )
 
 type Config struct {
-	ClickupToken string `json:"clickup_token"`
-	TeamId       string `json:"team_id"`
-	UserId       string `json:"user_id"`
-	ViewId       string `json:"view_id"`
+	ClickupToken    string `json:"clickup_token"`
+	TeamId          string `json:"team_id"`
+	UserId          string `json:"user_id"`
+	ViewId          string `json:"view_id"`
+	InitialView     string `json:"initial_view"` // "kanban", "timesheet"
+	TimesheetFilter string `json:"timesheet_filter"`
 }
 
 var config *Config

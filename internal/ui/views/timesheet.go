@@ -87,8 +87,11 @@ func fetchTimesheetEntries() tea.Msg {
 	config := clients.GetConfig()
 	client := clients.NewClickupClient(config.ClickupToken, config.TeamId)
 	userId := config.UserId
-
-	tasks, err := client.GetTimesheetTasks()
+	filter := config.TimesheetFilter
+	if filter == "" {
+		filter = "tags[]=timesheet"
+	}
+	tasks, err := client.GetTimesheetTasks(filter)
 	if err != nil {
 		return loadedTimesheetMsg{err: err}
 	}
@@ -286,35 +289,22 @@ func (m *TimesheetModel) startEditing() {
 }
 
 func (m TimesheetModel) Init() tea.Cmd {
-	return tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+	if m.loading {
+		return tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+	}
+	return nil
 }
 
 func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.loading {
-		switch msg := msg.(type) {
-		case loadedTimesheetMsg:
-			m.loading = false
-			if msg.err == nil {
-				m.timesheet = msg.timesheet
-				m.reapplyFiltersAndSort()
-			}
-		case spinner.TickMsg:
-			var cmd tea.Cmd
-			m.spinner, cmd = m.spinner.Update(msg)
-			return m, cmd
-		case tea.KeyMsg:
-			if msg.String() == "q" {
-				return m, tea.Quit
-			}
-		}
-		return m, nil
-	}
-
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case LoadMsg:
 		m.loading = true
 		cmd = tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 	case tea.MouseMsg:
@@ -322,7 +312,9 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.setSize(msg.Width, msg.Height)
 	case loadedTimesheetMsg:
+		m.loading = false
 		if msg.err == nil {
+			m.timesheet = msg.timesheet
 			m.reapplyFiltersAndSort()
 		}
 	}

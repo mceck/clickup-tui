@@ -27,6 +27,14 @@ type TaskResponse struct {
 	LastPage bool   `json:"last_page"`
 }
 
+type UserResponse struct {
+	User User `json:"user"`
+}
+
+type TeamsResponse struct {
+	Teams []Team `json:"teams"`
+}
+
 func SaveCache() error {
 	cache.BumpExpiry()
 	file, err := json.MarshalIndent(cache, "", " ")
@@ -64,6 +72,63 @@ func NewClickupClient(apiToken string, teamId string) *ClickupClient {
 		TeamID:     teamId,
 	}
 }
+
+func (c *ClickupClient) GetCurrentUser(token string) (User, error) {
+	url := fmt.Sprintf("%s/api/v2/user", c.BaseURL)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return User{}, err
+	}
+	req.Header.Set("Authorization", token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return User{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return User{}, fmt.Errorf("failed to get current user: %s", resp.Status)
+	}
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return User{}, err
+	}
+	var user UserResponse
+	err = json.Unmarshal(responseBody, &user)
+	if err != nil {
+		return User{}, err
+	}
+	return user.User, nil
+}
+
+func (c *ClickupClient) GetTeams(token string) ([]Team, error) {
+	url := fmt.Sprintf("%s/api/v2/team", c.BaseURL)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get current user: %s", resp.Status)
+	}
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var user TeamsResponse
+	err = json.Unmarshal(responseBody, &user)
+	if err != nil {
+		return nil, err
+	}
+	return user.Teams, nil
+}
+
 func (c *ClickupClient) getTasksPage(page int, qs string) (TaskResponse, error) {
 	url := fmt.Sprintf("%s/api/v2/team/%s/task?%s&page=%d", c.BaseURL, c.TeamID, qs, page)
 	req, err := http.NewRequest("GET", url, nil)
@@ -204,7 +269,7 @@ func (c *ClickupClient) GetTaskComments(taskId string) ([]Comment, error) {
 	return data.Comments, nil
 }
 
-func (c *ClickupClient) GetTimesheetTasks() ([]Task, error) {
+func (c *ClickupClient) GetTimesheetTasks(filter string) ([]Task, error) {
 	if cache.IsExpired() {
 		cache.Clear()
 	}
@@ -225,7 +290,7 @@ func (c *ClickupClient) GetTimesheetTasks() ([]Task, error) {
 			wg.Add(1)
 			go func(pIdx int, currentPage int) {
 				defer wg.Done()
-				res, err := c.getTasksPage(currentPage, "tags[]=timesheet")
+				res, err := c.getTasksPage(currentPage, filter)
 				if err != nil {
 					errCh <- err
 					return
