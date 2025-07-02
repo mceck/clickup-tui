@@ -12,7 +12,7 @@ A modern terminal user interface (TUI) client for [ClickUp](https://clickup.com/
 ## Prerequisites
 
 - [Go 1.24.2](https://golang.org/dl/) or higher
-- A ClickUp account and API token ([see ClickUp API docs](https://clickup.com/api))
+- A ClickUp account and API token ([see ClickUp API docs](https://developer.clickup.com/docs/authentication#personal-token))
 
 ## Installation
 
