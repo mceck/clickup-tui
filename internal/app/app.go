@@ -53,7 +53,7 @@ func New() AppModel {
 
 func (m AppModel) Init() tea.Cmd {
 	config := clients.GetConfig()
-	if config.ClickupToken == "" || config.TeamId == "" {
+	if config.ClickupToken == "" || config.TeamId == "" || config.UserId == "" {
 		m.currentPage = SettingsView
 	}
 	return m.getCurrentRoute().Init()
