@@ -16,29 +16,33 @@ A modern terminal user interface (TUI) client for [ClickUp](https://clickup.com/
 
 ## Installation
 
-You can install the latest version directly using Go:
+Clone the repository and run:
 
 ```sh
-go install github.com/mceck/clickup-tui@main
+go install
 ```
 
-This will place the `clickup-tui` binary in your `$GOBIN` (usually `$HOME/go/bin`). Make sure this directory is in your `PATH`.
+This will place the `clickup-tui` binary in your `$GOBIN`.
 
 [GitHub Repository](https://github.com/mceck/clickup-tui)
 
 ## Configuration
 
 On first run, or by selecting the Settings view (`?`), you will be prompted to enter your ClickUp credentials:
+
 - **ClickUp API Token**
 - **Team ID**
 - **User ID**
 - **View ID** (for the kanban board)
 
 These are saved in a JSON file at:
+
 ```
 $HOME/.config/clickup-tui/config.json
 ```
+
 Example config:
+
 ```json
 {
   "clickup_token": "your-token-here",
