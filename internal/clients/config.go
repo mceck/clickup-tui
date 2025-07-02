@@ -49,5 +49,7 @@ func SaveConfig(c Config) error {
 		return err
 	}
 	config = &c
+	ClearCache()
+	SaveCache()
 	return nil
 }
