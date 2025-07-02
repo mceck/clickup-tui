@@ -39,6 +39,8 @@ type Task struct {
 	Name          string    `json:"name"`
 	Description   string    `json:"markdown_description"`
 	Status        Status    `json:"status"`
+	Url           string    `json:"url"`
+	CustomId      string    `json:"custom_id"`
 	Assignees     []User    `json:"assignees"`
 	List          List      `json:"list"`
 	Tags          []Tag     `json:"tags"`

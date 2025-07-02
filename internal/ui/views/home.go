@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -166,6 +167,8 @@ func (m HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTasksLoadedEvent(msg)
 	case tea.KeyMsg:
 		return m.handleKeyEvent(msg)
+	case tea.MouseMsg:
+		return m.handleMouseInput(msg)
 	}
 
 	return m, nil
@@ -192,9 +195,9 @@ func (m HomeModel) View() string {
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Height(1)
 	var helpText string
 	if m.showModal {
-		helpText = helpStyle.Render("\n[↑/↓] scroll content    [j/k] scroll comments    [enter/esc] close")
+		helpText = helpStyle.Render("\n[↑ ↓] Scroll content    [j/k] Scroll comments    [enter/esc] Close")
 	} else {
-		helpText = helpStyle.Render("\n[← → ↑ ↓] navigate    [enter] Task Details    [tab] Timesheet    [r] refresh    [q] quit")
+		helpText = helpStyle.Render("\n[← → ↑ ↓] Navigate    [enter] Task Details    [tab] Timesheet    [y] Copy customId    [r] Refresh    [?] Settings    [q] Quit")
 	}
 
 	paddingHeight := m.height - lipgloss.Height(mainView)
@@ -315,6 +318,7 @@ func (m HomeModel) renderTask(task clients.Task, isSelected bool, statusColor st
 		}
 		assignees = append(assignees, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(bgColor)).Foreground(lipgloss.Color("#000000")).Padding(0, 1).MarginRight(1).Render(a.Initials))
 	}
+	assignees = append(assignees, lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Render("  📋"+task.CustomId))
 
 	var tags []string
 	for _, t := range task.Tags {
@@ -348,7 +352,8 @@ func (m HomeModel) viewModal() string {
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(statusColor)).Width(m.width - 6).Align(lipgloss.Left)
 	listStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	header := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(task.Name), listStyle.Render("📁 "+task.List.Name))
+	customIdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500"))
+	header := lipgloss.JoinVertical(lipgloss.Left, titleStyle.Render(task.Name+"   "+customIdStyle.Render("📋 "+task.CustomId)), listStyle.Render("📁 "+task.List.Name)+"   "+listStyle.Render("🔗 "+task.Url))
 
 	var metaInfo []string
 	metaInfo = append(metaInfo, lipgloss.NewStyle().Bold(true).Background(lipgloss.Color(statusColor)).Foreground(lipgloss.Color("#000000")).Padding(0, 1).MarginRight(2).Render(strings.ToUpper(task.Status.Status)))
@@ -511,6 +516,28 @@ func (m HomeModel) handleKeyEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.handleKeyMainEvent(msg)
 }
 
+func (m HomeModel) handleMouseInput(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.showModal {
+		return m.handleMouseModalEvent(msg)
+	}
+	return m.handleMouseMainEvent(msg)
+}
+
+func (m HomeModel) handleMouseMainEvent(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	return m, nil
+}
+
+func (m HomeModel) handleMouseModalEvent(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		customId := m.modalTask.CustomId
+		if customId != "" && msg.Y == 1 && msg.X >= len(m.modalTask.Name)+6 && msg.X < len(m.modalTask.Name)+9+len(customId) {
+			clipboard.WriteAll(customId)
+		}
+	}
+	return m, nil
+}
+
 func (m HomeModel) handleKeyModalEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc", "enter":
@@ -520,6 +547,10 @@ func (m HomeModel) handleKeyModalEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.contentViewport.ScrollUp(1)
 	case "down":
 		m.contentViewport.ScrollDown(1)
+	case "y":
+		if m.modalTask.CustomId != "" {
+			clipboard.WriteAll(m.modalTask.CustomId)
+		}
 	case "j":
 		m.commentsViewport.ScrollUp(1)
 	case "k":
@@ -536,6 +567,13 @@ func (m HomeModel) handleKeyMainEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		clients.ClearViewTasksCache()
 		m.loading = true
 		return m, tea.Batch(fetchTasks, m.spinner.Tick)
+	case "y":
+		if col, ok := m.columns[m.states[m.selectedColumn]]; ok && m.selectedTask < len(col.tasks) {
+			task := col.tasks[m.selectedTask]
+			if task.CustomId != "" {
+				clipboard.WriteAll(task.CustomId)
+			}
+		}
 	case "enter":
 		if col, ok := m.columns[m.states[m.selectedColumn]]; ok && m.selectedTask < len(col.tasks) {
 			task := col.tasks[m.selectedTask]

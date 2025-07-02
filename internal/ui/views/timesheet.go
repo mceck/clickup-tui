@@ -742,5 +742,5 @@ func (m *TimesheetModel) renderHelp() string {
 			"[esc] Exit Search    [↑↓] Navigate",
 		)
 	}
-	return "[←↑→↓] Navigate   [enter] Select/Edit   [/] Search   [tab] View   [r] Refresh   [q] Quit"
+	return "[← ↑ → ↓] Navigate   [enter] Select/Edit   [/] Search   [tab] View   [r] Refresh    [?] Settings   [q] Quit"
 }

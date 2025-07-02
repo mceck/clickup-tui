@@ -90,6 +90,10 @@ func (m SettingsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "esc":
+			return m, tea.Batch(func() tea.Msg {
+				return tea.KeyMsg{Type: tea.KeyTab}
+			})
 		case "enter":
 			token := m.token.Value()
 			if token == "" {
@@ -240,7 +244,7 @@ func (m SettingsModel) View() string {
 		radioRow,
 	)
 	formBox := ui.PanelStyle.Width(m.width - 4).Render(formContent)
-	footer := ui.InfoNotificationStyle.Render("[↑ ↓] move      [space/←/→] toggle      [enter] save and quit")
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render("[↑ ← → ↓] Move      [enter] Save and quit     [esc/tab] Go back")
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

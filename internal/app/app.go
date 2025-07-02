@@ -82,6 +82,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "?":
 			m.currentPage = SettingsView
+			m.routes[m.currentPage], cmd = m.getCurrentRoute().Update(nil)
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

@@ -25,20 +25,4 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(Highlight).
 			Padding(1, 2)
-
-	InfoNotificationStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Italic(true)
-
-	WarningNotificationStyle = lipgloss.NewStyle().
-					Foreground(Warning).
-					Italic(true)
-
-	ErrorNotificationStyle = lipgloss.NewStyle().
-				Foreground(Error).
-				Italic(true)
-
-	SuccessNotificationStyle = lipgloss.NewStyle().
-					Foreground(Special).
-					Italic(true)
 )
