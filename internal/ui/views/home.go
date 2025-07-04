@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -122,7 +122,7 @@ func (m *HomeModel) processTasks(tasks []clients.Task) {
 
 	stateMap := make(map[string]int)
 	for _, t := range tasks {
-		if existingOrder, ok := stateMap[t.Status.Status]; !ok || t.Status.Orderindex < existingOrder {
+		if existingOrder, ok := stateMap[t.Status.Status]; !ok || t.Status.Orderindex > existingOrder {
 			stateMap[t.Status.Status] = t.Status.Orderindex
 		}
 	}
@@ -131,8 +131,15 @@ func (m *HomeModel) processTasks(tasks []clients.Task) {
 	for name := range stateMap {
 		states = append(states, name)
 	}
-	sort.Slice(states, func(i, j int) bool { return stateMap[states[i]] < stateMap[states[j]] })
-
+	slices.SortFunc(states, func(a, b string) int {
+		if stateMap[a] == stateMap[b] {
+			return 0
+		}
+		if stateMap[a] < stateMap[b] {
+			return -1
+		}
+		return 1
+	})
 	m.states = states
 	m.columns = make(map[string]KColumn)
 	for _, state := range states {
