@@ -100,21 +100,36 @@ func fetchTimesheetEntries() tea.Msg {
 		return loadedTimesheetMsg{err: err}
 	}
 
-	datats := make([]TimeEntryR, len(tasks))
-	for i, task := range tasks {
-		datats[i] = TimeEntryR{
+	timesheetMap := make(map[string]TimeEntryR)
+
+	for _, task := range tasks {
+		timesheetMap[task.Id] = TimeEntryR{
 			TaskId:   task.Id,
 			TaskName: task.Name,
 			Hours:    make(map[string]float64),
 		}
-		for _, tracking := range trackings {
-			if t, ok := tracking.Task.(map[string]interface{}); ok {
-				if t["id"] == task.Id {
-					day := shared.ToDateString(tracking.Start)
-					datats[i].Hours[day] += shared.ToHours(tracking.Duration)
+	}
+
+	for _, tracking := range trackings {
+		if t, ok := tracking.Task.(map[string]interface{}); ok {
+			taskId := t["id"].(string)
+			entry, exists := timesheetMap[taskId]
+			if !exists {
+				entry = TimeEntryR{
+					TaskId:   taskId,
+					TaskName: t["name"].(string),
+					Hours:    make(map[string]float64),
 				}
 			}
+			day := shared.ToDateString(tracking.Start)
+			entry.Hours[day] += shared.ToHours(tracking.Duration)
+			timesheetMap[taskId] = entry
 		}
+	}
+
+	datats := make([]TimeEntryR, 0, len(timesheetMap))
+	for _, entry := range timesheetMap {
+		datats = append(datats, entry)
 	}
 
 	return loadedTimesheetMsg{timesheet: datats}
