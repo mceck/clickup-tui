@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -121,25 +120,28 @@ func (m HomeModel) Init() tea.Cmd {
 func (m *HomeModel) processTasks(tasks []clients.Task) {
 
 	stateMap := make(map[string]int)
+	states := make([]string, 0, len(stateMap))
 	for _, t := range tasks {
 		if existingOrder, ok := stateMap[t.Status.Status]; !ok || t.Status.Orderindex > existingOrder {
 			stateMap[t.Status.Status] = t.Status.Orderindex
+			if !ok {
+				states = append(states, t.Status.Status)
+			}
 		}
 	}
-
-	states := make([]string, 0, len(stateMap))
-	for name := range stateMap {
-		states = append(states, name)
-	}
-	slices.SortFunc(states, func(a, b string) int {
-		if stateMap[a] == stateMap[b] {
-			return 0
-		}
-		if stateMap[a] < stateMap[b] {
-			return -1
-		}
-		return 1
-	})
+	// No need to sort states here, tasks come from ClickUp in the correct order.
+	// for name := range stateMap {
+	// 	states = append(states, name)
+	// }
+	// slices.SortFunc(states, func(a, b string) int {
+	// 	if stateMap[a] == stateMap[b] {
+	// 		return 0
+	// 	}
+	// 	if stateMap[a] < stateMap[b] {
+	// 		return -1
+	// 	}
+	// 	return 1
+	// })
 	m.states = states
 	m.columns = make(map[string]KColumn)
 	for _, state := range states {
