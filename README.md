@@ -6,6 +6,12 @@ A modern terminal user interface (TUI) client for [ClickUp](https://clickup.com/
 
 ## Installation
 
+### Pre-built Binaries
+
+```sh
+curl -Ssl https://raw.githubusercontent.com/mceck/clickup-tui/refs/heads/main/scripts/install.sh | sh
+```
+
 ### From Source
 
 Clone the repository and run:

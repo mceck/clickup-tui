@@ -34,8 +34,8 @@ curl -Lfo clickup-tui.tar.gz "$LATEST_URL"
 tar xzf clickup-tui.tar.gz
 
 # Install the binary
-sudo mv clickup /usr/local/bin/
-sudo chmod +x /usr/local/bin/clickup
+sudo mv clickup-tui /usr/local/bin
+sudo chmod +x /usr/local/bin/clickup-tui
 
 # Clean up
 cd - > /dev/null
