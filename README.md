@@ -2,19 +2,11 @@
 
 A modern terminal user interface (TUI) client for [ClickUp](https://clickup.com/), built in Go using the Charmbracelet Bubble Tea ecosystem. Manage your ClickUp tasks, track time, and configure your workspace directly from your terminal.
 
-## Features
-
-- **Kanban Board:** View and manage your ClickUp tasks in a kanban-style board (Home View).
-- **Timesheet Tracking:** Log and edit time spent on tasks for each day of the week (Timesheet View).
-- **Settings UI:** Configure your ClickUp API credentials and workspace settings from within the TUI (Settings View).
-- **Fast and Responsive:** Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lipgloss](https://github.com/charmbracelet/lipgloss).
-
-## Prerequisites
-
-- [Go 1.24.2](https://golang.org/dl/) or higher
-- A ClickUp account and API token ([see ClickUp API docs](https://developer.clickup.com/docs/authentication#personal-token))
+![clickup-tui](./media/screen1.png)
 
 ## Installation
+
+### From Source
 
 Clone the repository and run:
 
@@ -22,18 +14,17 @@ Clone the repository and run:
 go install
 ```
 
-This will place the `clickup-tui` binary in your `$GOBIN`.
-
-[GitHub Repository](https://github.com/mceck/clickup-tui)
+This will build and place the `clickup-tui` binary in your `$GOBIN`.
 
 ## Configuration
 
 On first run, or by selecting the Settings view (`?`), you will be prompted to enter your ClickUp credentials:
 
-- **ClickUp API Token**
-- **Team ID**
-- **User ID**
+- **ClickUp API Token** [see ClickUp API docs](https://developer.clickup.com/docs/authentication#personal-token)
+- **Team ID** (you can find this in the URL when viewing your ClickUp workspace https://app.clickup.com/{team_id}/...)
 - **View ID** (for the kanban board)
+
+TODO implement a picker for team, and view IDs.
 
 These are saved in a JSON file at:
 
@@ -67,7 +58,6 @@ Example config:
   - Arrow keys to move between tasks and days
   - Enter to edit hours
 
-## Development
+## Acknowledgements
 
-- Format/lint: `go fmt ./...`
-- Clean build artifacts: `go clean`
+This extension is unofficial and not affiliated with ClickUp.
