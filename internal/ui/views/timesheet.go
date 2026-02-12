@@ -18,9 +18,10 @@ import (
 )
 
 type TimeEntryR struct {
-	TaskId   string
-	TaskName string
-	Hours    map[string]float64
+	TaskId     string
+	TaskName   string
+	TaskStatus string
+	Hours      map[string]float64
 }
 
 type loadedTimesheetMsg struct {
@@ -104,9 +105,10 @@ func fetchTimesheetEntries() tea.Msg {
 
 	for _, task := range tasks {
 		timesheetMap[task.Id] = TimeEntryR{
-			TaskId:   task.Id,
-			TaskName: task.Name,
-			Hours:    make(map[string]float64),
+			TaskId:     task.Id,
+			TaskName:   task.Name,
+			TaskStatus: strings.ToLower(task.Status.Status),
+			Hours:      make(map[string]float64),
 		}
 	}
 
@@ -115,10 +117,17 @@ func fetchTimesheetEntries() tea.Msg {
 			taskId := t["id"].(string)
 			entry, exists := timesheetMap[taskId]
 			if !exists {
+				taskStatus := ""
+				if status, ok := t["status"].(map[string]interface{}); ok {
+					if statusStr, ok := status["status"].(string); ok {
+						taskStatus = strings.ToLower(statusStr)
+					}
+				}
 				entry = TimeEntryR{
-					TaskId:   taskId,
-					TaskName: t["name"].(string),
-					Hours:    make(map[string]float64),
+					TaskId:     taskId,
+					TaskName:   t["name"].(string),
+					TaskStatus: taskStatus,
+					Hours:      make(map[string]float64),
 				}
 			}
 			day := shared.ToDateString(tracking.Start)
@@ -663,7 +672,7 @@ func (m *TimesheetModel) renderBody() string {
 
 func (m *TimesheetModel) renderRow(entry TimeEntryR, rowIdx int) string {
 	isCursorRow := (rowIdx == m.cursorRow)
-	taskCell := m.renderTaskCell(entry.TaskName, isCursorRow)
+	taskCell := m.renderTaskCell(entry.TaskName, entry.TaskStatus, isCursorRow)
 	dayCells := make([]string, 5)
 	for i := 0; i < 5; i++ {
 		day := m.weekFrom.AddDate(0, 0, i).Format("2006-01-02")
@@ -672,12 +681,16 @@ func (m *TimesheetModel) renderRow(entry TimeEntryR, rowIdx int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Left, append([]string{taskCell}, dayCells...)...)
 }
 
-func (m *TimesheetModel) renderTaskCell(taskNameInput string, isCursorRow bool) string {
+func (m *TimesheetModel) renderTaskCell(taskNameInput string, taskStatus string, isCursorRow bool) string {
 	var currentStyle lipgloss.Style
 	if isCursorRow {
 		currentStyle = m.styles.selectedRowStyle
 	} else {
 		currentStyle = m.styles.taskCellStyle
+	}
+
+	if taskStatus == "complete" || taskStatus == "closed" {
+		currentStyle = currentStyle.Foreground(lipgloss.Color("240"))
 	}
 
 	finalTextContent := taskNameInput
