@@ -689,7 +689,8 @@ func (m *TimesheetModel) renderTaskCell(taskNameInput string, taskStatus string,
 		currentStyle = m.styles.taskCellStyle
 	}
 
-	if taskStatus == "complete" || taskStatus == "closed" {
+	isClosed := taskStatus == "complete" || taskStatus == "closed"
+	if isClosed {
 		currentStyle = currentStyle.Foreground(lipgloss.Color("240"))
 	}
 
@@ -703,6 +704,11 @@ func (m *TimesheetModel) renderTaskCell(taskNameInput string, taskStatus string,
 			before := taskNameInput[:idx]
 			matchText := taskNameInput[idx : idx+len(m.searchQuery)]
 			after := taskNameInput[idx+len(m.searchQuery):]
+
+			highlightStyle := m.styles.highlightStyle
+			if isClosed {
+				highlightStyle = highlightStyle.Foreground(lipgloss.Color("240"))
+			}
 
 			contentBudgetForSpecialLayout := m.taskColWidth - 8
 
@@ -719,7 +725,7 @@ func (m *TimesheetModel) renderTaskCell(taskNameInput string, taskStatus string,
 				if len(matchText) > maxMatchHighlightLen {
 					mPartText = matchText[:maxMatchHighlightLen]
 				}
-				highlightedMatchPart := m.styles.highlightStyle.Render(mPartText)
+				highlightedMatchPart := highlightStyle.Render(mPartText)
 
 				aPart := after
 				startAfterIndex := len(after) - halfBudget
@@ -728,9 +734,19 @@ func (m *TimesheetModel) renderTaskCell(taskNameInput string, taskStatus string,
 				}
 				aPart = after[startAfterIndex:]
 
-				finalTextContent = bPart + ".." + highlightedMatchPart + ".." + aPart
+				if isClosed {
+					closedFg := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+					finalTextContent = bPart + ".." + highlightedMatchPart + closedFg.Render(".."+aPart)
+				} else {
+					finalTextContent = bPart + ".." + highlightedMatchPart + ".." + aPart
+				}
 			} else {
-				finalTextContent = before + m.styles.highlightStyle.Render(matchText) + after
+				if isClosed {
+					closedFg := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+					finalTextContent = before + highlightStyle.Render(matchText) + closedFg.Render(after)
+				} else {
+					finalTextContent = before + highlightStyle.Render(matchText) + after
+				}
 			}
 		}
 	} else if maxLen := m.taskColWidth - 6; lipgloss.Width(taskNameInput) > maxLen && maxLen > 0 {
