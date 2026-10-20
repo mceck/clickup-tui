@@ -406,14 +406,52 @@ type TsResponse struct {
 	Data []TimeEntry
 }
 
-func (c *ClickupClient) GetTimesheetsEntries(userId string) ([]TimeEntry, error) {
+// timeEntriesMu guards the time entries cache, which can be extended by
+// background fetches while the timesheet is being edited.
+var timeEntriesMu sync.Mutex
+
+// GetTimesheetsEntries returns the user's time entries in the [from, to) range.
+// Entries are cached: when the requested range goes beyond the cached one only
+// the missing parts are fetched and merged with the cached entries.
+func (c *ClickupClient) GetTimesheetsEntries(userId string, from time.Time, to time.Time) ([]TimeEntry, error) {
+	timeEntriesMu.Lock()
+	defer timeEntriesMu.Unlock()
 	if cache.IsExpired() {
 		cache.Clear()
 	}
-	if cache.TimeEntries != nil {
+	fromMs, toMs := from.UnixMilli(), to.UnixMilli()
+	if cache.TimeEntries == nil || cache.TimeEntriesFrom == 0 || cache.TimeEntriesTo == 0 {
+		entries, err := c.fetchTimeEntries(userId, fromMs, toMs-1)
+		if err != nil {
+			return nil, err
+		}
+		cache.TimeEntries, cache.TimeEntriesFrom, cache.TimeEntriesTo = entries, fromMs, toMs
+		SaveCache()
 		return cache.TimeEntries, nil
 	}
-	url := fmt.Sprintf("%s/api/v2/team/%s/time_entries?assignee=%s", c.BaseURL, c.TeamID, userId)
+	if fromMs >= cache.TimeEntriesFrom && toMs <= cache.TimeEntriesTo {
+		return cache.TimeEntries, nil
+	}
+	if fromMs < cache.TimeEntriesFrom {
+		older, err := c.fetchTimeEntries(userId, fromMs, cache.TimeEntriesFrom-1)
+		if err != nil {
+			return nil, err
+		}
+		cache.TimeEntries, cache.TimeEntriesFrom = append(older, cache.TimeEntries...), fromMs
+	}
+	if toMs > cache.TimeEntriesTo {
+		newer, err := c.fetchTimeEntries(userId, cache.TimeEntriesTo, toMs-1)
+		if err != nil {
+			return nil, err
+		}
+		cache.TimeEntries, cache.TimeEntriesTo = append(cache.TimeEntries, newer...), toMs
+	}
+	SaveCache()
+	return cache.TimeEntries, nil
+}
+
+func (c *ClickupClient) fetchTimeEntries(userId string, startDate int64, endDate int64) ([]TimeEntry, error) {
+	url := fmt.Sprintf("%s/api/v2/team/%s/time_entries?assignee=%s&start_date=%d&end_date=%d", c.BaseURL, c.TeamID, userId, startDate, endDate)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -439,8 +477,6 @@ func (c *ClickupClient) GetTimesheetsEntries(userId string) ([]TimeEntry, error)
 	if err != nil {
 		return nil, err
 	}
-	cache.TimeEntries = data.Data
-	SaveCache()
 	return data.Data, nil
 }
 
@@ -491,7 +527,8 @@ func (c *ClickupClient) CreateTimeEntry(taskId string, start time.Time, duration
 }
 
 func (c *ClickupClient) UpdateTracking(userId string, taskId string, day time.Time, hours float64) error {
-	allUserEntries, err := c.GetTimesheetsEntries(userId)
+	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+	allUserEntries, err := c.GetTimesheetsEntries(userId, dayStart, dayStart.AddDate(0, 0, 1))
 	if err != nil {
 		return fmt.Errorf("UpdateTracking: failed to get timesheet entries: %w", err)
 	}
@@ -539,7 +576,11 @@ func ClearCache() {
 }
 
 func ClearTimeentriesCache() {
+	timeEntriesMu.Lock()
+	defer timeEntriesMu.Unlock()
 	cache.TimeEntries = nil
+	cache.TimeEntriesFrom = 0
+	cache.TimeEntriesTo = 0
 	SaveCache()
 }
 

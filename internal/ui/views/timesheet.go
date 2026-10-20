@@ -26,6 +26,8 @@ type TimeEntryR struct {
 
 type loadedTimesheetMsg struct {
 	timesheet []TimeEntryR
+	from      time.Time
+	to        time.Time
 	err       error
 }
 
@@ -69,6 +71,9 @@ type TimesheetModel struct {
 	searchMode   bool
 	searchQuery  string
 	loading      bool
+	loadingMore  bool
+	loadedFrom   time.Time
+	loadedTo     time.Time
 	spinner      spinner.Model
 	styles       tsStyles
 	taskColWidth int
@@ -84,7 +89,14 @@ const (
 	colFri
 )
 
-func fetchTimesheetEntries() tea.Msg {
+// fetchTimesheetEntries loads the timesheet with the time entries tracked in the [from, to) range.
+func fetchTimesheetEntries(from time.Time, to time.Time) tea.Cmd {
+	return func() tea.Msg {
+		return loadTimesheet(from, to)
+	}
+}
+
+func loadTimesheet(from time.Time, to time.Time) tea.Msg {
 	config := clients.GetConfig()
 	client := clients.NewClickupClient(config.ClickupToken, config.TeamId)
 	userId := config.UserId
@@ -96,7 +108,7 @@ func fetchTimesheetEntries() tea.Msg {
 	if err != nil {
 		return loadedTimesheetMsg{err: err}
 	}
-	trackings, err := client.GetTimesheetsEntries(userId)
+	trackings, err := client.GetTimesheetsEntries(userId, from, to)
 	if err != nil {
 		return loadedTimesheetMsg{err: err}
 	}
@@ -141,7 +153,7 @@ func fetchTimesheetEntries() tea.Msg {
 		datats = append(datats, entry)
 	}
 
-	return loadedTimesheetMsg{timesheet: datats}
+	return loadedTimesheetMsg{timesheet: datats, from: from, to: to}
 }
 
 func sortTimesheetEntries(entries []TimeEntryR, weekStart time.Time) []TimeEntryR {
@@ -190,7 +202,7 @@ func filterTimesheet(entries []TimeEntryR, query string) []TimeEntryR {
 func NewTimesheetModel() TimesheetModel {
 	s := spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))))
 	now := time.Now()
-	weekFrom := now.AddDate(0, 0, -int(now.Weekday())+1)
+	weekFrom := time.Date(now.Year(), now.Month(), now.Day()-int(now.Weekday())+1, 0, 0, 0, 0, now.Location())
 
 	m := TimesheetModel{
 		timesheet: []TimeEntryR{},
@@ -301,7 +313,7 @@ func (m *TimesheetModel) stopEditing() {
 }
 
 func (m *TimesheetModel) startEditing() {
-	if len(m.activeTimesheet()) == 0 {
+	if len(m.activeTimesheet()) == 0 || m.loadingMore {
 		return
 	}
 	m.editing = true
@@ -314,9 +326,34 @@ func (m *TimesheetModel) startEditing() {
 
 func (m TimesheetModel) Init() tea.Cmd {
 	if m.loading {
-		return tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+		return tea.Batch(m.loadInitialRange(), m.spinner.Tick)
 	}
 	return nil
+}
+
+// loadInitialRange loads the displayed week and about 30 days ahead.
+func (m *TimesheetModel) loadInitialRange() tea.Cmd {
+	return fetchTimesheetEntries(m.weekFrom, m.weekFrom.AddDate(0, 0, 35))
+}
+
+// loadMissingWeek lazily fetches the time entries of the displayed week when
+// it falls outside the range loaded so far.
+func (m *TimesheetModel) loadMissingWeek() tea.Cmd {
+	if m.loading || m.loadingMore || m.loadedFrom.IsZero() {
+		return nil
+	}
+	from, to := m.loadedFrom, m.loadedTo
+	if weekTo := m.weekFrom.AddDate(0, 0, 7); weekTo.After(to) {
+		to = weekTo
+	}
+	if m.weekFrom.Before(from) {
+		from = m.weekFrom
+	}
+	if from.Equal(m.loadedFrom) && to.Equal(m.loadedTo) {
+		return nil
+	}
+	m.loadingMore = true
+	return fetchTimesheetEntries(from, to)
 }
 
 func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -324,7 +361,7 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case LoadMsg:
 		m.loading = true
-		cmd = tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+		cmd = tea.Batch(m.loadInitialRange(), m.spinner.Tick)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -336,10 +373,13 @@ func (m TimesheetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.setSize(msg.Width, msg.Height)
 	case loadedTimesheetMsg:
-		m.loading = false
+		m.loading, m.loadingMore = false, false
 		if msg.err == nil {
 			m.timesheet = msg.timesheet
+			m.loadedFrom, m.loadedTo = msg.from, msg.to
 			m.reapplyFiltersAndSort()
+			// the user may have moved to another week while loading
+			cmd = m.loadMissingWeek()
 		}
 	}
 
@@ -352,7 +392,7 @@ func (m *TimesheetModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editing {
 		m.handleEditingInput(msg)
 	} else if m.searchMode {
-		m.handleSearchInput(msg)
+		cmd = m.handleSearchInput(msg)
 	} else {
 		cmd = m.handleNavigationInput(msg)
 	}
@@ -459,7 +499,7 @@ func (m *TimesheetModel) handleEditingInput(msg tea.KeyMsg) {
 	}
 }
 
-func (m *TimesheetModel) handleSearchInput(msg tea.KeyMsg) {
+func (m *TimesheetModel) handleSearchInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.Type {
 	case tea.KeyEscape:
 		m.searchMode, m.searchQuery = false, ""
@@ -475,8 +515,9 @@ func (m *TimesheetModel) handleSearchInput(msg tea.KeyMsg) {
 		m.filtered = filterTimesheet(m.timesheet, m.searchQuery)
 		m.cursorRow = 0
 	default:
-		m.handleNavigationInput(msg)
+		return m.handleNavigationInput(msg)
 	}
+	return nil
 }
 
 func (m *TimesheetModel) handleNavigationInput(msg tea.KeyMsg) tea.Cmd {
@@ -487,7 +528,7 @@ func (m *TimesheetModel) handleNavigationInput(msg tea.KeyMsg) tea.Cmd {
 		clients.ClearTimesheetTasksCache()
 		clients.ClearTimeentriesCache()
 		m.loading = true
-		return tea.Batch(fetchTimesheetEntries, m.spinner.Tick)
+		return tea.Batch(m.loadInitialRange(), m.spinner.Tick)
 	case "enter":
 		if m.cursorCol > colTask && len(m.activeTimesheet()) > 0 {
 			m.startEditing()
@@ -506,6 +547,7 @@ func (m *TimesheetModel) handleNavigationInput(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			m.weekFrom, m.cursorCol = m.weekFrom.AddDate(0, 0, -7), colFri
 			m.reapplyFiltersAndSort()
+			return m.loadMissingWeek()
 		}
 	case "right":
 		if m.cursorCol < colFri {
@@ -513,13 +555,16 @@ func (m *TimesheetModel) handleNavigationInput(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			m.weekFrom, m.cursorCol = m.weekFrom.AddDate(0, 0, 7), colMon
 			m.reapplyFiltersAndSort()
+			return m.loadMissingWeek()
 		}
 	case "ctrl+left":
 		m.weekFrom = m.weekFrom.AddDate(0, 0, -7)
 		m.reapplyFiltersAndSort()
+		return m.loadMissingWeek()
 	case "ctrl+right":
 		m.weekFrom = m.weekFrom.AddDate(0, 0, 7)
 		m.reapplyFiltersAndSort()
+		return m.loadMissingWeek()
 	case "/":
 		m.searchMode, m.searchQuery = true, ""
 		m.filtered, m.cursorRow = m.timesheet, 0
@@ -602,7 +647,11 @@ func (m TimesheetModel) View() string {
 		m.weekDays[i] = m.weekFrom.AddDate(0, 0, i).Format("Mon 2")
 	}
 
-	title := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, ui.TitleStyle.Render("Weekly Timesheet"))
+	title := ui.TitleStyle.Render("Weekly Timesheet")
+	if m.loadingMore {
+		title += " " + m.spinner.View()
+	}
+	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
 	table := m.renderTable()
 	help := m.renderHelp()
 
